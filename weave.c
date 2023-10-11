@@ -9,11 +9,15 @@
 #define MAXBLKS 16
 #define HDRKEY 2031
 #define BUFKEY 2032
+#define WV_HDRKEY 5031
+#define WV_BUFKEY 5032
 #define BLKSIZE (32 * 512 * 4096)
 
 typedef struct {
   unsigned int flag;
-  unsigned int curr_blk, curr_rec, blk_size;
+  unsigned int curr_blk;
+  unsigned int curr_rec;
+  unsigned int blk_size;
   int overflow;
   double comptime[MAXBLKS];
   double datatime[MAXBLKS];
@@ -21,8 +25,11 @@ typedef struct {
 } Buffer;
 
 typedef struct {
-  unsigned int active, status;
-  double comptime, datatime, reftime;
+  unsigned int active;
+  unsigned int status;
+  double comptime;
+  double datatime;
+  double reftime;
   struct timeval timestamp[MAXBLKS];
   struct timeval timestamp_gps[MAXBLKS];
   double blk_nano[MAXBLKS];
@@ -36,12 +43,9 @@ static void handler(int _) {
 }
 
 int main() {
-  int idhdr;
-  int idbuf;
-  int numrec = 0;
-  int numblk = 0;
-  Header *HdrRead;
-  Buffer *BufRead;
+  int recNumRead = 0;
+  int recNumWrite = 0;
+  int currentReadBlock = 0;
 
   signal(SIGINT, handler);
 
@@ -53,23 +57,43 @@ int main() {
 
   unsigned char *raw = (unsigned char *)malloc((long)MAXBLKS * (long)BLKSIZE);
 
-  idhdr = shmget(HDRKEY, sizeof(Header), SHM_RDONLY);
-  idbuf = shmget(BUFKEY, sizeof(Buffer), SHM_RDONLY);
-  if (idhdr < 0 || idbuf < 0) {
+  int idHdrRead = shmget(HDRKEY, sizeof(Header), SHM_RDONLY);
+  int idBufRead = shmget(BUFKEY, sizeof(Buffer), SHM_RDONLY);
+  if (idHdrRead < 0 || idBufRead < 0) {
     printf("\nShared memory does not exist.\n");
     exit(1);
   }
 
-  HdrRead = (Header *)shmat(idhdr, 0, SHM_RDONLY);
-  BufRead = (Buffer *)shmat(idbuf, 0, SHM_RDONLY);
+  Header *HdrRead = (Header *)shmat(idHdrRead, 0, 0);
+  Buffer *BufRead = (Buffer *)shmat(idBufRead, 0, 0);
   if ((BufRead) == (Buffer *)-1) {
     printf("\nCould not attach to shared memory.\n");
     exit(1);
   }
 
+  int idHdrWrite = shmget(WV_HDRKEY, sizeof(Header), IPC_CREAT | 0666);
+  int idBufWrite = shmget(WV_BUFKEY, sizeof(Buffer), IPC_CREAT | 0666);
+  if (idHdrRead < 0 || idBufRead < 0) {
+    printf("\nCould not create shared memory.\n");
+    exit(1);
+  }
+
+  Header *HdrWrite = (Header *)shmat(idHdrWrite, 0, 0);
+  Buffer *BufWrite = (Buffer *)shmat(idBufWrite, 0, 0);
+  if ((BufWrite) == (Buffer *)-1) {
+    printf("\nCould not attach to shared memory.\n");
+    exit(1);
+  }
+
+  BufWrite->curr_rec = 0;
+  BufWrite->curr_blk = 0;
+  recNumWrite = (BufWrite->curr_rec) % MAXBLKS;
+
+  HdrWrite->active = 1;
+
   while (keep) {
     int flag = 0;
-    while (numblk == BufRead->curr_blk) {
+    while (currentReadBlock == BufRead->curr_blk) {
       usleep(2000);
       if (flag == 0) {
         printf("\nWaiting...\n");
@@ -79,21 +103,26 @@ int main() {
     if (flag == 1)
       printf("\nReady!\n");
 
-    printf("Block being read = %d\n", numblk);
-    printf("Record being read = %d\n", numrec);
+    printf("Block being read = %d\n", currentReadBlock);
+    printf("Record being read = %d\n", recNumRead);
     printf("Block being written = %d\n", BufRead->curr_blk);
     printf("Record being written = %d\n", BufRead->curr_rec);
 
-    if (BufRead->curr_blk - numblk >= MAXBLKS - 1) {
+    if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
       printf("\nRealigning...\n");
-      numrec = (BufRead->curr_rec - 1 + MAXBLKS) % MAXBLKS;
-      numblk = BufRead->curr_blk - 1;
+      recNumRead = (BufRead->curr_rec - 1 + MAXBLKS) % MAXBLKS;
+      currentReadBlock = BufRead->curr_blk - 1;
     }
 
-    memcpy(raw, BufRead->data + ((long)BLKSIZE * (long)numrec), BLKSIZE);
+    memcpy(raw, BufRead->data + ((long)BLKSIZE * (long)recNumRead), BLKSIZE);
 
-    numrec = (numrec + 1) % MAXBLKS;
-    numblk++;
+    recNumRead = (recNumRead + 1) % MAXBLKS;
+    currentReadBlock++;
+
+    memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
+    BufWrite->curr_rec = (recNumWrite + 1) % MAXBLKS;
+    BufWrite->curr_blk += 1;
+    recNumWrite = (recNumWrite + 1) % MAXBLKS;
 
     fwrite(raw, 1, BLKSIZE, dump);
   }
