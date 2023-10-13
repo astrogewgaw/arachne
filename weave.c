@@ -6,9 +6,9 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "ext/argtable3.h"
-#include "ext/log.h"
-#include "ext/toml.h"
+#include "extern/argtable3.h"
+#include "extern/log.h"
+#include "extern/toml.h"
 
 #define WEAVE_VERSION "0.1.0"
 
