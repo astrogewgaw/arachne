@@ -6,12 +6,24 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "extern/argtable3.h"
-#include "extern/log.h"
-#include "extern/toml.h"
+#include "extern/argtable3.h" // For argument parsing.
+#include "extern/log.h"       // For logging.
+#include "extern/toml.h"      // For parsing TOML files.
 
 #define WEAVE_VERSION "0.1.0"
 
+/* SHARED MEMORY SHENANIGANS!
+ * ==========================
+ *
+ * For a sampling time of 1.31072 ms, the shared memory at the
+ * telescope is structured as 32 blocks, with each block being
+ * 512 samples, or 0.67108864 s, long. The entire shared memory
+ * at the telescope is 21.47483648 s long, with a size of 64 MB.
+ * We then form another shared memory when we wish to search for
+ * FRBs, where each block is 21.47483648 s long, and there are
+ * 16 blocks. This makes this shared memory 343.59738368 s long,
+ * with a size of 1 GB.
+ */
 #define MAXBLKS 16
 #define IN_HDRKEY 2031
 #define IN_BUFKEY 2032
@@ -19,19 +31,21 @@
 #define OUT_BUFKEY 5032
 #define BLKSIZE (32 * 512 * 4096)
 
+/* Struct to store program configuration. */
 typedef struct {
-  int nf;
-  double t1;
-  double t2;
-  double f1;
-  double f2;
-  double dt;
-  double df;
-  double bw;
-  double tsys;
-  double gain;
+  int nf;      // Number of channels.
+  double t1;   // Starting time.
+  double t2;   // End time.
+  double f1;   // Lowest frequency.
+  double f2;   // Highest frequency.
+  double dt;   // Sampling time.
+  double df;   // Channel width.
+  double bw;   // Bandwidth.
+  double tsys; // System temperature.
+  double gain; // System gain.
 } Config;
 
+/* Struct for storing data from the ring buffer. */
 typedef struct {
   unsigned int flag;
   unsigned int curr_blk;
@@ -43,6 +57,7 @@ typedef struct {
   unsigned char data[(long)(BLKSIZE) * (long)(MAXBLKS)];
 } Buffer;
 
+/* Struct for storing the ring buffer's header. */
 typedef struct {
   unsigned int active;
   unsigned int status;
@@ -54,6 +69,11 @@ typedef struct {
   double blk_nano[MAXBLKS];
 } Header;
 
+/* Code to handle SIGINT. SIGINT is the signal sent when
+ * we press Ctrl+C. One can think of SIGINT as a request
+ * to intrrupt or terminate the program sent by the user.
+ * We choose to terminate the program when this happens.
+ */
 static volatile sig_atomic_t keep = 1;
 static void handler(int _) {
   (void)_;
@@ -62,17 +82,20 @@ static void handler(int _) {
 }
 
 int main(int argc, char *argv[]) {
+  /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
 
+  /* Code to handle argument parsing. */
   struct arg_lit *help;
   struct arg_lit *version;
   struct arg_file *cfgfile;
+  struct arg_file *burstfile;
   struct arg_end *end;
 
   void *argtable[] = {
       help = arg_litn("h", "help", 0, 1, "Display help."),
       version = arg_litn("V", "version", 0, 1, "Display version."),
-      cfgfile = arg_file0("c", "config", "<file>", "input files"),
+      cfgfile = arg_file0("c", "config", "<file>", "Configuration file."),
       end = arg_end(20),
   };
 
@@ -107,18 +130,19 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  FILE *f = fopen(*cfgfile->filename, "r");
+  /* Code to read in the configuration file. */
+  FILE *cf = fopen(*cfgfile->filename, "r");
   char errbuf[200];
-  if (!f) {
+  if (!cf) {
     log_error("Cannot open configuration file.");
     exit(1);
   }
-  toml_table_t *tab = toml_parse_file(f, errbuf, sizeof(errbuf));
+  toml_table_t *tab = toml_parse_file(cf, errbuf, sizeof(errbuf));
   if (!tab) {
     log_error("Cannot parse configuration file.");
     exit(1);
   }
-  fclose(f);
+  fclose(cf);
 
   toml_table_t *system = toml_table_in(tab, "system");
   if (!system) {
@@ -203,6 +227,11 @@ int main(int argc, char *argv[]) {
   log_info("System temperature = %.2f K.", cfg.tsys);
   log_info("System gain = %.2f Jy.", cfg.gain);
 
+  /* Code to setup reading in the raw data from the ring buffer,
+   * and writing it out to another one. Here we check whether the
+   * required shared memory exists, and whether we can create the
+   * other one.
+   */
   unsigned char *raw = (unsigned char *)malloc((long)MAXBLKS * (long)BLKSIZE);
 
   int recNumRead = 0;
@@ -247,6 +276,10 @@ int main(int argc, char *argv[]) {
 
   HdrWrite->active = 1;
 
+  /* The infinite loop that keeps reading in the data and writing it
+   * out to another shared memory continuously, injecting the burst(s)
+   * at the right time.
+   */
   while (keep) {
     int flag = 0;
     while (currentReadBlock == BufRead->curr_blk) {
@@ -256,8 +289,7 @@ int main(int argc, char *argv[]) {
         flag = 1;
       }
     }
-    if (flag == 1)
-      log_debug("Ready!");
+    if (flag == 1) log_debug("Ready!");
 
     log_debug("Block being read = %d", currentReadBlock);
     log_debug("Record being read = %d", recNumRead);
@@ -275,13 +307,17 @@ int main(int argc, char *argv[]) {
     recNumRead = (recNumRead + 1) % MAXBLKS;
     currentReadBlock++;
 
+    /* Code for burst injection. */
+
     memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
     BufWrite->curr_rec = (recNumWrite + 1) % MAXBLKS;
     BufWrite->curr_blk += 1;
     recNumWrite = (recNumWrite + 1) % MAXBLKS;
   }
+  /* Free the memory we allocated to store the data. */
   free(raw);
 
+/* Free up memory if and when the argument parsing exits. */
 exit:
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
   return exitcode;

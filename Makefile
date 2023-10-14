@@ -1,6 +1,6 @@
 .PHONY: build clean
 
-PROGRAM := weave
+PROGRAM := arachne
 
 CC := gcc
 INC_DIR := extern
@@ -17,11 +17,11 @@ cross:
 	@zig \
 		build-exe \
 		$(DEPS) \
-		weave.c \
+		$(PROGRAM).c \
 		$(CFLAGS) \
 		$(INC_FLAGS) \
 		--library c \
-		--name weave \
+		--name $(PROGRAM) \
 		-target x86_64-linux
 
 clean:
