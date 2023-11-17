@@ -35,3 +35,6 @@
 *.hex
 *.i*86
 *.x86_64
+
+# The binary.
+/arachne
