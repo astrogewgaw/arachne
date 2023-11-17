@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,7 @@
 #include "extern/log.h"       // For logging.
 #include "extern/toml.h"      // For parsing TOML files.
 
-#define WEAVE_VERSION "0.1.0"
+#define ARACHNE_VERSION "0.1.0"
 
 /* SHARED MEMORY SHENANIGANS!
  * ==========================
@@ -30,6 +31,7 @@
 #define OUT_HDRKEY 5031
 #define OUT_BUFKEY 5032
 #define BLKSIZE (32 * 512 * 4096)
+#define TOTALSIZE (long)(BLKSIZE) * (long)(MAXBLKS)
 
 /* Struct to store program configuration. */
 typedef struct {
@@ -54,7 +56,7 @@ typedef struct {
   int overflow;
   double comptime[MAXBLKS];
   double datatime[MAXBLKS];
-  unsigned char data[(long)(BLKSIZE) * (long)(MAXBLKS)];
+  unsigned char data[TOTALSIZE];
 } Buffer;
 
 /* Struct for storing the ring buffer's header. */
@@ -81,12 +83,46 @@ static void handler(int _) {
   exit(_);
 }
 
+char *trim(char *str) {
+  size_t len = 0;
+  char *begp = str;
+  char *endp = NULL;
+  if (str == NULL) {
+    return NULL;
+  }
+  if (str[0] == '\0') {
+    return str;
+  }
+  len = strlen(str);
+  endp = str + len;
+  while (isspace((unsigned char)*begp)) {
+    ++begp;
+  }
+  if (endp != begp) {
+    while (isspace((unsigned char)*(--endp)) && endp != begp) {
+    }
+  }
+  if (begp != str && endp == begp)
+    *str = '\0';
+  else if (str + len - 1 != endp)
+    *(endp + 1) = '\0';
+  endp = str;
+  if (begp != str) {
+    while (*begp) {
+      *endp++ = *begp++;
+    }
+    *endp = '\0';
+  }
+  return str;
+}
+
 int main(int argc, char *argv[]) {
   /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
 
   /* Code to handle argument parsing. */
   struct arg_lit *help;
+  struct arg_lit *debug;
   struct arg_lit *version;
   struct arg_file *cfgfile;
   struct arg_file *burstfile;
@@ -95,13 +131,18 @@ int main(int argc, char *argv[]) {
   void *argtable[] = {
       help = arg_litn("h", "help", 0, 1, "Display help."),
       version = arg_litn("V", "version", 0, 1, "Display version."),
-      cfgfile = arg_file0("c", "config", "<file>", "Configuration file."),
+      debug = arg_litn("d", "debug", 0, 1, "Activate debugging mode."),
+      cfgfile = arg_file0(NULL, "config", "<file>", "Configuration file."),
+      burstfile = arg_file0(NULL, "burst", "<file>", "Simulated burst file."),
       end = arg_end(20),
   };
 
   int exitcode = 0;
-  char progname[] = "weave";
+  char progname[] = "arachne";
   int nerrors = arg_parse(argc, argv, argtable);
+
+  log_set_level(LOG_INFO);
+  if (debug->count > 0) log_set_level(LOG_DEBUG);
 
   if (help->count > 0) {
     printf("Usage: %s", progname);
@@ -113,7 +154,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (version->count > 0) {
-    printf("Version: %s\n", WEAVE_VERSION);
+    printf("Version: %s\n", ARACHNE_VERSION);
     exitcode = 0;
     goto exit;
   }
@@ -227,12 +268,130 @@ int main(int argc, char *argv[]) {
   log_info("System temperature = %.2f K.", cfg.tsys);
   log_info("System gain = %.2f Jy.", cfg.gain);
 
+  /* Code to read in the file with the simulated FRB. */
+
+  if (burstfile->count == 0) {
+    log_warn("No file specified for the simulated FRB.");
+    log_warn("Arachne won't weave in anything into shared memory.");
+  } else {
+    FILE *bf = fopen(*burstfile->filename, "r");
+    char _fmt[64];
+    char _tmp[1024];
+    fread(&_tmp, sizeof(char), 64, bf);
+    strcpy(_fmt, trim(_tmp));
+
+    /* Initialise disposable variables. */
+    int _nf;
+    int _pos;
+    float _f1;
+    float _f2;
+    float _dt;
+    float _t1;
+    float _t2;
+    float _raj;
+    float _decj;
+    int _useang;
+    long _seed;
+    int _haslabels;
+    char _name[128];
+    char _posf[128];
+    char projid[128];
+    char _source[128];
+    char _observer[128];
+    char _telescope[128];
+
+    if (strcmp(_fmt, "FORMAT 1") == 0) {
+      fread(&_name, sizeof(char), 128, bf);
+      fread(&_t1, sizeof(float), 1, bf);
+      fread(&_t2, sizeof(float), 1, bf);
+      fread(&_dt, sizeof(float), 1, bf);
+      fread(&_f1, sizeof(float), 1, bf);
+      fread(&_f2, sizeof(float), 1, bf);
+      fread(&_nf, sizeof(int), 1, bf);
+      fread(&_raj, sizeof(float), 1, bf);
+      fread(&_decj, sizeof(float), 1, bf);
+      fread(&_useang, sizeof(int), 1, bf);
+      fread(&_seed, sizeof(long), 1, bf);
+    } else if (strcmp(_fmt, "FORMAT 1.1") == 0) {
+      fread(&_name, sizeof(char), 128, bf);
+      fread(&_t1, sizeof(float), 1, bf);
+      fread(&_t2, sizeof(float), 1, bf);
+      fread(&_dt, sizeof(float), 1, bf);
+      fread(&_f1, sizeof(float), 1, bf);
+      fread(&_f2, sizeof(float), 1, bf);
+      fread(&_nf, sizeof(int), 1, bf);
+      fread(&_raj, sizeof(float), 1, bf);
+      fread(&_decj, sizeof(float), 1, bf);
+      fread(&_useang, sizeof(int), 1, bf);
+      fread(&_seed, sizeof(long), 1, bf);
+      fread(&_haslabels, sizeof(int), 1, bf);
+      if (_haslabels == 1) {
+        log_error("Don't support labels yet.");
+        exit(1);
+      }
+    } else if (strcmp(_fmt, "FORMAT 1.2") == 0) {
+      fread(&_name, sizeof(char), 128, bf);
+      fread(&_t1, sizeof(float), 1, bf);
+      fread(&_t2, sizeof(float), 1, bf);
+      fread(&_dt, sizeof(float), 1, bf);
+      fread(&_f1, sizeof(float), 1, bf);
+      fread(&_f2, sizeof(float), 1, bf);
+      fread(&_nf, sizeof(int), 1, bf);
+      fread(&_pos, sizeof(int), 1, bf);
+      if (_pos == 1) {
+        fread(&_raj, sizeof(float), 1, bf);
+        fread(&_decj, sizeof(float), 1, bf);
+      } else
+        fread(&_posf, sizeof(char), 128, bf);
+      fread(&_useang, sizeof(int), 1, bf);
+      fread(&_seed, sizeof(long), 1, bf);
+      fread(&_haslabels, sizeof(int), 1, bf);
+      if (_haslabels == 1) {
+        log_error("Don't support labels yet.");
+        exit(1);
+      }
+    } else if (strcmp(_fmt, "FORMAT 2.1") == 0) {
+      fread(&_name, sizeof(char), 128, bf);
+      fread(&_t1, sizeof(float), 1, bf);
+      fread(&_t2, sizeof(float), 1, bf);
+      fread(&_dt, sizeof(float), 1, bf);
+      fread(&_f1, sizeof(float), 1, bf);
+      fread(&_f2, sizeof(float), 1, bf);
+      fread(&_nf, sizeof(int), 1, bf);
+      fread(&_pos, sizeof(int), 1, bf);
+      if (_pos == 1) {
+        fread(&_raj, sizeof(float), 1, bf);
+        fread(&_decj, sizeof(float), 1, bf);
+      } else
+        fread(&_posf, sizeof(char), 128, bf);
+      fread(&_useang, sizeof(int), 1, bf);
+      fread(&_seed, sizeof(long), 1, bf);
+      if (_haslabels == 1) {
+        log_error("Don't support labels yet.");
+        exit(1);
+      }
+    } else {
+      log_error("Unable to process this file format.");
+      exit(1);
+    }
+  }
+
+  FILE *dump;
+  if (debug->count > 0) {
+    /* Temporary file, created for debugging. */
+    dump = fopen("temp.raw", "w");
+    if (dump == NULL) {
+      log_error("Could not open file.");
+      exit(1);
+    }
+  }
+
   /* Code to setup reading in the raw data from the ring buffer,
    * and writing it out to another one. Here we check whether the
    * required shared memory exists, and whether we can create the
    * other one.
    */
-  unsigned char *raw = (unsigned char *)malloc((long)MAXBLKS * (long)BLKSIZE);
+  unsigned char *raw = (unsigned char *)malloc(TOTALSIZE);
 
   int recNumRead = 0;
   int recNumWrite = 0;
@@ -302,20 +461,39 @@ int main(int argc, char *argv[]) {
       currentReadBlock = BufRead->curr_blk - 1;
     }
 
-    memcpy(raw, BufRead->data + ((long)BLKSIZE * (long)recNumRead), BLKSIZE);
+    long offread = (long)BLKSIZE * (long)recNumRead;
+    memcpy(raw + offread, BufRead->data + offread, BLKSIZE);
+
+    unsigned char temp = 0;
+    for (int i = offread; i < offread + BLKSIZE; i = i + 4) {
+      temp = ((((raw[i + 0] << 2) & 0xc0) >> 6) & 0x03) |
+             ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
+             ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
+             ((((raw[i + 3] << 2) & 0xc0)));
+
+      /* TODO: Code for burst injection. */
+
+      raw[i + 3] = (temp & 0x03);
+      raw[i + 2] = (temp & 0x0c) >> 2;
+      raw[i + 1] = (temp & 0x30) >> 4;
+      raw[i + 0] = (temp & 0xc0) >> 6;
+    }
+
+    long offwrite = (long)BLKSIZE * (long)recNumWrite;
+    memcpy(BufWrite->data + offwrite, raw + offwrite, BLKSIZE);
+
+    /* For debugging, write data to file for checks later. */
+    if (debug->count > 0) fwrite(raw + offread, 1, BLKSIZE, dump);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
     currentReadBlock++;
 
-    /* Code for burst injection. */
-
-    memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
     BufWrite->curr_rec = (recNumWrite + 1) % MAXBLKS;
     BufWrite->curr_blk += 1;
     recNumWrite = (recNumWrite + 1) % MAXBLKS;
   }
-  /* Free the memory we allocated to store the data. */
-  free(raw);
+  free(raw);    /* Free the memory allocated for data. */
+  fclose(dump); /* Close the file opened for debugging. */
 
 /* Free up memory if and when the argument parsing exits. */
 exit:
