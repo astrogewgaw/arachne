@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 
 #include "extern/argtable3.h" // For argument parsing.
 #include "extern/log.h"       // For logging.
+#include "extern/mt19937.h"   // For MT-RNG.
 #include "extern/toml.h"      // For parsing TOML files.
 
 #define ARACHNE_VERSION "0.1.0"
@@ -116,9 +118,28 @@ char *trim(char *str) {
   return str;
 }
 
+double min(double x, double y) { return (x < y) ? x : y; }
+double max(double x, double y) { return (x > y) ? x : y; }
+double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
+double clip(double x, double x1, double x2) {
+  return (x >= x1 && x < x2) ? x : ((x < x1) ? x1 : x2);
+}
+
+long set_seed() { return -time(NULL); }
+double random_deviate(long *seed) {
+  if (*seed < 0) {
+    init_genrand(-(*seed));
+    *seed = 1;
+  }
+  return genrand_real1();
+}
+
 int main(int argc, char *argv[]) {
   /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
+
+  /* Set the seed for the RNG. */
+  long seed = set_seed();
 
   /* Code to handle argument parsing. */
   struct arg_lit *help;
@@ -270,11 +291,12 @@ int main(int argc, char *argv[]) {
 
   /* Code to read in the file with the simulated FRB. */
 
+  FILE *bf;
   if (burstfile->count == 0) {
     log_warn("No file specified for the simulated FRB.");
     log_warn("Arachne won't weave in anything into shared memory.");
   } else {
-    FILE *bf = fopen(*burstfile->filename, "r");
+    bf = fopen(*burstfile->filename, "r");
     char _fmt[64];
     char _tmp[1024];
     fread(&_tmp, sizeof(char), 64, bf);
@@ -471,19 +493,75 @@ int main(int argc, char *argv[]) {
              ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
              ((((raw[i + 3] << 2) & 0xc0)));
 
-      /* TODO: Code for burst injection. */
-
       raw[i + 3] = (temp & 0x03);
       raw[i + 2] = (temp & 0x0c) >> 2;
       raw[i + 1] = (temp & 0x30) >> 4;
       raw[i + 0] = (temp & 0xc0) >> 6;
     }
 
-    long offwrite = (long)BLKSIZE * (long)recNumWrite;
-    memcpy(BufWrite->data + offwrite, raw + offwrite, BLKSIZE);
+    if (burstfile->count > 0) {
+      for (int i = offread; i < offread + BLKSIZE; i = i + 4) {
+        float flux = 0;
+        fread(&flux, sizeof(float), 1, bf);
+        double sigma = cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
+
+        double lvl = 1;
+        double plvl1, plvl2, plvl3;
+        double signal = flux / sigma;
+        double pval = random_deviate(&seed);
+
+        int out;
+        int in = raw[i];
+
+        if (in == 3)
+          out = 3;
+        else if (in == 2) {
+          plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
+
+          if (pval < plvl1)
+            out = 2;
+          else
+            out = 3;
+        } else if (in == 1) {
+          plvl1 =
+              (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl));
+          plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
+                           prob(max(-signal, -lvl))) /
+                              (0.5 - prob(-lvl));
+
+          if (pval < plvl1)
+            out = 3;
+          else if (pval < plvl2)
+            out = 2;
+          else
+            out = 1;
+        } else if (in == 0) {
+          plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl);
+          plvl2 = plvl1 +
+                  (prob(min(-signal + lvl, -lvl)) - prob(min(-signal, -lvl))) /
+                      prob(-lvl);
+          plvl3 = plvl2 +
+                  (prob(min(-signal, -lvl)) - prob(-lvl - signal)) / prob(-lvl);
+
+          if (pval < plvl1)
+            out = 3;
+          else if (pval < plvl2)
+            out = 2;
+          else if (pval < plvl3)
+            out = 1;
+          else
+            out = 0;
+        }
+
+        raw[i] = out;
+      }
+    }
 
     /* For debugging, write data to file for checks later. */
     if (debug->count > 0) fwrite(raw + offread, 1, BLKSIZE, dump);
+
+    long offwrite = (long)BLKSIZE * (long)recNumWrite;
+    memcpy(BufWrite->data + offwrite, raw + offwrite, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
     currentReadBlock++;
