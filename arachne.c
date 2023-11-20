@@ -1,6 +1,16 @@
+/*
+ *                             __
+ *      ____ __________ ______/ /_  ____  ___
+ *     / __ `/ ___/ __ `/ ___/ __ \/ __ \/ _ \
+ *    / /_/ / /  / /_/ / /__/ / / / / / /  __/
+ *    \__,_/_/   \__,_/\___/_/ /_/_/ /_/\___/
+ *
+ */
+
 #include <ctype.h>
 #include <math.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,11 +18,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+/* External libraries. */
 #include "extern/argtable3.h" // For argument parsing.
 #include "extern/log.h"       // For logging.
-#include "extern/mt19937.h"   // For MT-RNG.
+#include "extern/mt19937.h"   // For random number generation.
 #include "extern/toml.h"      // For parsing TOML files.
 
+/* Arachne's version number. */
 #define ARACHNE_VERSION "0.1.0"
 
 /* SHARED MEMORY SHENANIGANS!
@@ -75,7 +87,7 @@ typedef struct {
 
 /* Code to handle SIGINT. SIGINT is the signal sent when
  * we press Ctrl+C. One can think of SIGINT as a request
- * to intrrupt or terminate the program sent by the user.
+ * to interrupt or terminate the program sent by the user.
  * We choose to terminate the program when this happens.
  */
 static volatile sig_atomic_t keep = 1;
@@ -85,6 +97,7 @@ static void handler(int _) {
   exit(_);
 }
 
+/* Trim padding and spaces from a string. */
 char *trim(char *str) {
   size_t len = 0;
   char *begp = str;
@@ -118,13 +131,20 @@ char *trim(char *str) {
   return str;
 }
 
+/* Basic functions for:
+ *  1. finding the least of two numbers.
+ *  2. finding the greater of two numbers.
+ *  3. clipping a number between two values.
+ *  4. calculating the probability of a Gaussian random variable.
+ */
 double min(double x, double y) { return (x < y) ? x : y; }
 double max(double x, double y) { return (x > y) ? x : y; }
-double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
 double clip(double x, double x1, double x2) {
   return (x >= x1 && x < x2) ? x : ((x < x1) ? x1 : x2);
 }
+double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
 
+/* Functions for random number generation. */
 long set_seed() { return -time(NULL); }
 double random_deviate(long *seed) {
   if (*seed < 0) {
@@ -134,17 +154,34 @@ double random_deviate(long *seed) {
   return genrand_real1();
 }
 
+/* Print Arachne's logo. */
+void print_logo() {
+  char *logo = "\n"
+               "                         __             \n"
+               "  ____ __________ ______/ /_  ____  ___ \n"
+               " / __ `/ ___/ __ `/ ___/ __ \\/ __ \\/ _ \\\n"
+               "/ /_/ / /  / /_/ / /__/ / / / / / /  __/\n"
+               "\\__,_/_/   \\__,_/\\___/_/ /_/_/ /_/\\___/ \n"
+               "                                        ";
+
+  printf("\e[1m%s\e[m\n\n", logo);
+  printf("\e[1mWeave in fake FRBs into live GMRT data.\e[m\n");
+  printf("\e[1mCode: \e[4mhttps://github.com/astrogewgaw/arachne.\e[m\n\n");
+}
+
+/* The main function. */
 int main(int argc, char *argv[]) {
   /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
 
-  /* Set the seed for the RNG. */
-  long seed = set_seed();
+  /*==========================================================================*/
+  /*========================= ARGUMENT PARSING ===============================*/
+  /*==========================================================================*/
 
-  /* Code to handle argument parsing. */
   struct arg_lit *help;
   struct arg_lit *debug;
   struct arg_lit *version;
+  struct arg_lit *verbose;
   struct arg_file *cfgfile;
   struct arg_file *burstfile;
   struct arg_end *end;
@@ -153,6 +190,7 @@ int main(int argc, char *argv[]) {
       help = arg_litn("h", "help", 0, 1, "Display help."),
       version = arg_litn("V", "version", 0, 1, "Display version."),
       debug = arg_litn("d", "debug", 0, 1, "Activate debugging mode."),
+      verbose = arg_litn("v", "verbose", 0, 1, "Enable verbose output."),
       cfgfile = arg_file0(NULL, "config", "<file>", "Configuration file."),
       burstfile = arg_file0(NULL, "burst", "<file>", "Simulated burst file."),
       end = arg_end(20),
@@ -162,13 +200,10 @@ int main(int argc, char *argv[]) {
   char progname[] = "arachne";
   int nerrors = arg_parse(argc, argv, argtable);
 
-  log_set_level(LOG_INFO);
-  if (debug->count > 0) log_set_level(LOG_DEBUG);
-
   if (help->count > 0) {
+    print_logo();
     printf("Usage: %s", progname);
     arg_print_syntax(stdout, argtable, "\n");
-    printf("Weave in fake FRBs into telescope data in real-time.\n\n");
     arg_print_glossary(stdout, argtable, "  %-25s %s\n");
     exitcode = 0;
     goto exit;
@@ -187,12 +222,30 @@ int main(int argc, char *argv[]) {
     goto exit;
   }
 
+  print_logo();
+
+  FILE *logfile = fopen("arachne.log", "w");
+  if (logfile == NULL) {
+    log_error("Could not open file for logging.");
+    exit(1);
+  }
+
+  int loglvl = LOG_INFO;
+  if (debug->count > 0) loglvl = LOG_DEBUG;
+
+  log_set_level(loglvl);
+  log_add_fp(logfile, loglvl);
+  if (verbose->count == 0) log_set_quiet(true);
+
   if (cfgfile->count == 0) {
     log_error("No configuration file specified.");
     exit(1);
   }
 
-  /* Code to read in the configuration file. */
+  /*==========================================================================*/
+  /*========================= CONFIGURATION PARSING ==========================*/
+  /*==========================================================================*/
+
   FILE *cf = fopen(*cfgfile->filename, "r");
   char errbuf[200];
   if (!cf) {
@@ -273,6 +326,7 @@ int main(int argc, char *argv[]) {
   cfg.t2 = t2.u.d;
   cfg.f1 = f1.u.d;
   cfg.f2 = f2.u.d;
+  cfg.dt = dt.u.d;
   cfg.tsys = tsys.u.d;
   cfg.gain = gain.u.d;
   cfg.bw = cfg.f2 - cfg.f1;
@@ -285,11 +339,16 @@ int main(int argc, char *argv[]) {
   log_info("Bandwidth = %.2f MHz.", cfg.bw);
   log_info("Channel width = %.2f kHz.", cfg.df * 1e3);
   log_info("Number of channels = %d.", cfg.nf);
-  log_info("Sampling time = %.2f s.", cfg.dt);
+  log_info("Sampling time = %e s.", cfg.dt);
   log_info("System temperature = %.2f K.", cfg.tsys);
-  log_info("System gain = %.2f Jy.", cfg.gain);
+  log_info("System gain = %.2f Jy / K.", cfg.gain);
 
-  /* Code to read in the file with the simulated FRB. */
+  /*==========================================================================*/
+  /*=========================== INJECTION PREP ===============================*/
+  /*==========================================================================*/
+
+  /* Set the seed for injection. */
+  long seed = set_seed();
 
   FILE *bf;
   if (burstfile->count == 0) {
@@ -302,7 +361,6 @@ int main(int argc, char *argv[]) {
     fread(&_tmp, sizeof(char), 64, bf);
     strcpy(_fmt, trim(_tmp));
 
-    /* Initialise disposable variables. */
     int _nf;
     int _pos;
     float _f1;
@@ -317,10 +375,6 @@ int main(int argc, char *argv[]) {
     int _haslabels;
     char _name[128];
     char _posf[128];
-    char projid[128];
-    char _source[128];
-    char _observer[128];
-    char _telescope[128];
 
     if (strcmp(_fmt, "FORMAT 1") == 0) {
       fread(&_name, sizeof(char), 128, bf);
@@ -398,9 +452,9 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
   if (debug->count > 0) {
-    /* Temporary file, created for debugging. */
     dump = fopen("temp.raw", "w");
     if (dump == NULL) {
       log_error("Could not open file.");
@@ -408,11 +462,10 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* Code to setup reading in the raw data from the ring buffer,
-   * and writing it out to another one. Here we check whether the
-   * required shared memory exists, and whether we can create the
-   * other one.
-   */
+  /*==========================================================================*/
+  /*======================= SHARED MEMORY SHENANIGANS ========================*/
+  /*==========================================================================*/
+
   unsigned char *raw = (unsigned char *)malloc(TOTALSIZE);
 
   int recNumRead = 0;
@@ -454,13 +507,12 @@ int main(int argc, char *argv[]) {
   BufWrite->curr_rec = 0;
   BufWrite->curr_blk = 0;
   recNumWrite = (BufWrite->curr_rec) % MAXBLKS;
-
   HdrWrite->active = 1;
 
-  /* The infinite loop that keeps reading in the data and writing it
-   * out to another shared memory continuously, injecting the burst(s)
-   * at the right time.
-   */
+  /*==========================================================================*/
+  /*======================== MAIN EXECUTION LOOP =============================*/
+  /*==========================================================================*/
+
   while (keep) {
     int flag = 0;
     while (currentReadBlock == BufRead->curr_blk) {
@@ -500,9 +552,9 @@ int main(int argc, char *argv[]) {
     }
 
     if (burstfile->count > 0) {
-      for (int i = offread; i < offread + BLKSIZE; i = i + 4) {
+      for (int i = offread; i < offread + BLKSIZE; i++) {
         float flux = 0;
-        fread(&flux, sizeof(float), 1, bf);
+        if (fread(&flux, sizeof(float), 1, bf) == 0) break;
         double sigma = cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
 
         double lvl = 1;
@@ -557,7 +609,6 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    /* For debugging, write data to file for checks later. */
     if (debug->count > 0) fwrite(raw + offread, 1, BLKSIZE, dump);
 
     long offwrite = (long)BLKSIZE * (long)recNumWrite;
