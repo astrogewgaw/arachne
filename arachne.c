@@ -180,19 +180,20 @@ int main(int argc, char *argv[]) {
 
   struct arg_lit *help;
   struct arg_lit *debug;
+  struct arg_file *frbs;
   struct arg_lit *version;
   struct arg_lit *verbose;
   struct arg_file *cfgfile;
-  struct arg_file *burstfile;
   struct arg_end *end;
 
   void *argtable[] = {
-      help = arg_litn("h", "help", 0, 1, "Display help."),
-      version = arg_litn("V", "version", 0, 1, "Display version."),
-      debug = arg_litn("d", "debug", 0, 1, "Activate debugging mode."),
-      verbose = arg_litn("v", "verbose", 0, 1, "Enable verbose output."),
-      cfgfile = arg_file0(NULL, "config", "<file>", "Configuration file."),
-      burstfile = arg_file0(NULL, "burst", "<file>", "Simulated burst file."),
+      help = arg_litn("h", NULL, 0, 1, "Display help."),
+      version = arg_litn("V", NULL, 0, 1, "Display version."),
+      debug = arg_litn("d", NULL, 0, 1, "Activate debugging mode."),
+      verbose = arg_litn("v", NULL, 0, 1, "Enable verbose output."),
+      cfgfile = arg_file0("c", NULL, "<file>", "Specify a configuration file."),
+      frbs = arg_filen("f", NULL, "<file>", 0, argc + 2,
+                       "Specify FRB file(s) to inject."),
       end = arg_end(20),
   };
 
@@ -343,115 +344,6 @@ int main(int argc, char *argv[]) {
   log_info("System temperature = %.2f K.", cfg.tsys);
   log_info("System gain = %.2f Jy / K.", cfg.gain);
 
-  /*==========================================================================*/
-  /*=========================== INJECTION PREP ===============================*/
-  /*==========================================================================*/
-
-  /* Set the seed for injection. */
-  long seed = set_seed();
-
-  FILE *bf;
-  if (burstfile->count == 0) {
-    log_warn("No file specified for the simulated FRB.");
-    log_warn("Arachne won't weave in anything into shared memory.");
-  } else {
-    bf = fopen(*burstfile->filename, "r");
-    char _fmt[64];
-    char _tmp[1024];
-    fread(&_tmp, sizeof(char), 64, bf);
-    strcpy(_fmt, trim(_tmp));
-
-    int _nf;
-    int _pos;
-    float _f1;
-    float _f2;
-    float _dt;
-    float _t1;
-    float _t2;
-    float _raj;
-    float _decj;
-    int _useang;
-    long _seed;
-    int _haslabels;
-    char _name[128];
-    char _posf[128];
-
-    if (strcmp(_fmt, "FORMAT 1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_raj, sizeof(float), 1, bf);
-      fread(&_decj, sizeof(float), 1, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-    } else if (strcmp(_fmt, "FORMAT 1.1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_raj, sizeof(float), 1, bf);
-      fread(&_decj, sizeof(float), 1, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      fread(&_haslabels, sizeof(int), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else if (strcmp(_fmt, "FORMAT 1.2") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_pos, sizeof(int), 1, bf);
-      if (_pos == 1) {
-        fread(&_raj, sizeof(float), 1, bf);
-        fread(&_decj, sizeof(float), 1, bf);
-      } else
-        fread(&_posf, sizeof(char), 128, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      fread(&_haslabels, sizeof(int), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else if (strcmp(_fmt, "FORMAT 2.1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_pos, sizeof(int), 1, bf);
-      if (_pos == 1) {
-        fread(&_raj, sizeof(float), 1, bf);
-        fread(&_decj, sizeof(float), 1, bf);
-      } else
-        fread(&_posf, sizeof(char), 128, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else {
-      log_error("Unable to process this file format.");
-      exit(1);
-    }
-  }
-
   /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
   if (debug->count > 0) {
@@ -523,11 +415,9 @@ int main(int argc, char *argv[]) {
       }
     }
     if (flag == 1) log_debug("Ready!");
-
-    log_debug("Block being read = %d", currentReadBlock);
-    log_debug("Record being read = %d", recNumRead);
-    log_debug("Block being written = %d", BufRead->curr_blk);
-    log_debug("Record being written = %d", BufRead->curr_rec);
+    double blktime = ((double)BLKSIZE / 4096) * cfg.dt;
+    log_debug("Reading block no. %d", currentReadBlock);
+    log_debug("At t = %f s in the data.", (double)currentReadBlock * blktime);
 
     if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
       log_debug("Realigning...");
@@ -536,6 +426,10 @@ int main(int argc, char *argv[]) {
     }
 
     memcpy(raw, BufRead->data + (long)BLKSIZE * (long)recNumRead, BLKSIZE);
+
+    /*==================================================================*/
+    /*======================== REQUANTIZATION ==========================*/
+    /*==================================================================*/
 
     unsigned char temp = 0;
     for (int i = 0; i < BLKSIZE; i = i + 4) {
@@ -550,62 +444,118 @@ int main(int argc, char *argv[]) {
       raw[i + 0] = (temp & 0xc0) >> 6;
     }
 
-    if (burstfile->count > 0) {
-      for (int i = 0; i < BLKSIZE; i++) {
-        float flux = 0;
-        if (fread(&flux, sizeof(float), 1, bf) == 0) break;
-        double sigma = cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
+    /*==================================================================*/
+    /*======================== FRB INJECTION ===========================*/
+    /*==================================================================*/
 
-        double lvl = 1;
-        double plvl1, plvl2, plvl3;
-        double signal = flux / sigma;
-        double pval = random_deviate(&seed);
+    if (frbs->count > 0) {
+      log_info("Weaving in %d FRB(s) into shared memory.", frbs->count);
+      for (int idx = 0; idx < frbs->count; ++idx) {
+        /* Get the burst's data and metadata. */
+        FILE *bf = fopen(frbs->filename[idx], "r");
 
-        int out;
-        int in = raw[i];
+        long M, N, nnz = 0;
+        double dm, flux, width, tburst;
 
-        if (in == 3)
-          out = 3;
-        else if (in == 2) {
-          plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
+        fread(&M, sizeof(long), 1, bf);
+        fread(&N, sizeof(long), 1, bf);
+        fread(&nnz, sizeof(long), 1, bf);
+        fread(&dm, sizeof(double), 1, bf);
+        fread(&flux, sizeof(double), 1, bf);
+        fread(&width, sizeof(double), 1, bf);
+        fread(&tburst, sizeof(double), 1, bf);
 
-          if (pval < plvl1)
-            out = 2;
-          else
-            out = 3;
-        } else if (in == 1) {
-          plvl1 =
-              (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl));
-          plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
-                           prob(max(-signal, -lvl))) /
-                              (0.5 - prob(-lvl));
-
-          if (pval < plvl1)
-            out = 3;
-          else if (pval < plvl2)
-            out = 2;
-          else
-            out = 1;
-        } else if (in == 0) {
-          plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl);
-          plvl2 = plvl1 +
-                  (prob(min(-signal + lvl, -lvl)) - prob(min(-signal, -lvl))) /
-                      prob(-lvl);
-          plvl3 = plvl2 +
-                  (prob(min(-signal, -lvl)) - prob(-lvl - signal)) / prob(-lvl);
-
-          if (pval < plvl1)
-            out = 3;
-          else if (pval < plvl2)
-            out = 2;
-          else if (pval < plvl3)
-            out = 1;
-          else
-            out = 0;
+        int *rows = (int *)malloc(nnz * sizeof(int));
+        int *cols = (int *)malloc(nnz * sizeof(int));
+        float *fluxes = (float *)malloc(nnz * sizeof(float));
+        if (nnz > 0) {
+          for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
+          for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
+          for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
+        } else {
+          log_warn("Cannot inject since no burst in the file.");
+          continue;
         }
 
-        raw[i] = out;
+        /* Set the seed for injection. */
+        long seed = set_seed();
+
+        /* Begin injection. */
+
+        log_info("Injecting FRB %d with DM = %lf pc per cm^-3, flux = %lf Jy, "
+                 "width = %lf s, at %lf s in the stream.",
+                 idx + 1, dm, flux, width, tburst);
+        for (int i = 0; i < nnz; ++i) {
+          float flux = fluxes[i];
+          double sigma =
+              cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
+
+          long offset = (long)(tburst / cfg.dt);
+          long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
+          long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
+          long I = (offset + (long)rows[i]) * (long)cfg.nf + (long)cols[i];
+
+          if ((I <= blkbeg) || (I >= blkend)) break;
+          I = I % (long)BLKSIZE;
+
+          int out;
+          int in = raw[I];
+
+          double lvl = 1;
+          double plvl1, plvl2, plvl3;
+          double signal = flux / sigma;
+          double pval = random_deviate(&seed);
+
+          if (in == 3)
+            out = 3;
+          else if (in == 2) {
+            plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
+
+            if (pval < plvl1)
+              out = 2;
+            else
+              out = 3;
+          } else if (in == 1) {
+            plvl1 =
+                (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl));
+            plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
+                             prob(max(-signal, -lvl))) /
+                                (0.5 - prob(-lvl));
+
+            if (pval < plvl1)
+              out = 3;
+            else if (pval < plvl2)
+              out = 2;
+            else
+              out = 1;
+          } else if (in == 0) {
+            plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl);
+            plvl2 = plvl1 + (prob(min(-signal + lvl, -lvl)) -
+                             prob(min(-signal, -lvl))) /
+                                prob(-lvl);
+            plvl3 = plvl2 + (prob(min(-signal, -lvl)) - prob(-lvl - signal)) /
+                                prob(-lvl);
+
+            if (pval < plvl1)
+              out = 3;
+            else if (pval < plvl2)
+              out = 2;
+            else if (pval < plvl3)
+              out = 1;
+            else
+              out = 0;
+          }
+          raw[I] = out;
+        }
+        free(rows);
+        free(cols);
+        free(fluxes);
+        fclose(bf);
+        log_info("Injection successful for FRB %d.", idx + 1);
       }
+    } else {
+      log_warn("No file(s) specified for the simulated FRB(s).");
+      log_warn("Arachne won't weave in anything into shared memory.");
     }
 
     if (debug->count > 0) fwrite(raw, 1, BLKSIZE, dump);
