@@ -466,7 +466,7 @@ int main(int argc, char *argv[]) {
   /*======================= SHARED MEMORY SHENANIGANS ========================*/
   /*==========================================================================*/
 
-  unsigned char *raw = (unsigned char *)malloc(TOTALSIZE);
+  unsigned char *raw = (unsigned char *)malloc(BLKSIZE);
 
   int recNumRead = 0;
   int recNumWrite = 0;
@@ -535,11 +535,10 @@ int main(int argc, char *argv[]) {
       currentReadBlock = BufRead->curr_blk - 1;
     }
 
-    long offread = (long)BLKSIZE * (long)recNumRead;
-    memcpy(raw + offread, BufRead->data + offread, BLKSIZE);
+    memcpy(raw, BufRead->data + (long)BLKSIZE * (long)recNumRead, BLKSIZE);
 
     unsigned char temp = 0;
-    for (int i = offread; i < offread + BLKSIZE; i = i + 4) {
+    for (int i = 0; i < BLKSIZE; i = i + 4) {
       temp = ((((raw[i + 0] << 2) & 0xc0) >> 6) & 0x03) |
              ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
              ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
@@ -552,7 +551,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (burstfile->count > 0) {
-      for (int i = offread; i < offread + BLKSIZE; i++) {
+      for (int i = 0; i < BLKSIZE; i++) {
         float flux = 0;
         if (fread(&flux, sizeof(float), 1, bf) == 0) break;
         double sigma = cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
@@ -609,10 +608,9 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (debug->count > 0) fwrite(raw + offread, 1, BLKSIZE, dump);
+    if (debug->count > 0) fwrite(raw, 1, BLKSIZE, dump);
 
-    long offwrite = (long)BLKSIZE * (long)recNumWrite;
-    memcpy(BufWrite->data + offwrite, raw + offwrite, BLKSIZE);
+    memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
     currentReadBlock++;
