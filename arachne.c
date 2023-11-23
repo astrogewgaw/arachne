@@ -481,10 +481,6 @@ int main(int argc, char *argv[]) {
         long seed = set_seed();
 
         /* Begin injection. */
-
-        log_info("Injecting FRB %d with DM = %lf pc per cm^-3, flux = %lf Jy, "
-                 "width = %lf s, at %lf s in the stream.",
-                 idx + 1, dm, flux, width, tburst);
         for (int i = 0; i < nnz; ++i) {
           float flux = fluxes[i];
           double sigma =
@@ -495,7 +491,16 @@ int main(int argc, char *argv[]) {
           long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
           long I = (offset + (long)rows[i]) * (long)cfg.nf + (long)cols[i];
 
-          if ((I <= blkbeg) || (I >= blkend)) break;
+          if ((I <= blkbeg) || (I >= blkend))
+            break;
+          else {
+            if (i == 0) {
+              log_info(
+                  "Injecting FRB %d with DM = %lf pc per cm^-3, flux = %lf Jy, "
+                  "width = %lf s, at %lf s in the stream.",
+                  idx + 1, dm, flux, width, tburst);
+            }
+          }
           I = I % (long)BLKSIZE;
 
           int out;
@@ -546,12 +551,13 @@ int main(int argc, char *argv[]) {
               out = 0;
           }
           raw[I] = out;
+          if (i == nnz - 1)
+            log_info("Injection successful for FRB %d.", idx + 1);
         }
         free(rows);
         free(cols);
         free(fluxes);
         fclose(bf);
-        log_info("Injection successful for FRB %d.", idx + 1);
       }
     } else {
       log_warn("No file(s) specified for the simulated FRB(s).");
