@@ -47,20 +47,6 @@
 #define BLKSIZE (32 * 512 * 4096)
 #define TOTALSIZE (long)(BLKSIZE) * (long)(MAXBLKS)
 
-/* Struct to store program configuration. */
-typedef struct {
-  int nf;      // Number of channels.
-  double t1;   // Starting time.
-  double t2;   // End time.
-  double f1;   // Lowest frequency.
-  double f2;   // Highest frequency.
-  double dt;   // Sampling time.
-  double df;   // Channel width.
-  double bw;   // Bandwidth.
-  double tsys; // System temperature.
-  double gain; // System gain.
-} Config;
-
 /* Struct for storing data from the ring buffer. */
 typedef struct {
   unsigned int flag;
@@ -84,6 +70,19 @@ typedef struct {
   struct timeval timestamp_gps[MAXBLKS];
   double blk_nano[MAXBLKS];
 } Header;
+
+/* Struct to store program configuration. */
+typedef struct {
+  int nf;         // Number of channels.
+  double fl;      // Lowest frequency.
+  double fh;      // Highest frequency.
+  double dt;      // Sampling time.
+  double df;      // Channel width.
+  double bw;      // Bandwidth.
+  double tsys;    // System temperature.
+  double antgain; // Antenna gain.
+  double sysgain; // System gain.
+} Config;
 
 /* Code to handle SIGINT. SIGINT is the signal sent when
  * we press Ctrl+C. One can think of SIGINT as a request
@@ -191,9 +190,8 @@ int main(int argc, char *argv[]) {
       version = arg_litn("V", NULL, 0, 1, "Display version."),
       debug = arg_litn("d", NULL, 0, 1, "Activate debugging mode."),
       verbose = arg_litn("v", NULL, 0, 1, "Enable verbose output."),
-      cfgfile = arg_file0("c", NULL, "<file>", "Specify a configuration file."),
-      frbs = arg_filen("f", NULL, "<file>", 0, argc + 2,
-                       "Specify FRB file(s) to inject."),
+      cfgfile = arg_file0("c", NULL, "<FILE>", "Specify config file."),
+      frbs = arg_filen(NULL, NULL, "<FRB>", 0, argc + 2, "FRBs to inject."),
       end = arg_end(20),
   };
 
@@ -243,6 +241,9 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
+  if (frbs->count > 0)
+    log_warn("No FRBs will be injected since none specified.");
+
   /*==========================================================================*/
   /*========================= CONFIGURATION PARSING ==========================*/
   /*==========================================================================*/
@@ -253,101 +254,70 @@ int main(int argc, char *argv[]) {
     log_error("Cannot open configuration file.");
     exit(1);
   }
-  toml_table_t *tab = toml_parse_file(cf, errbuf, sizeof(errbuf));
-  if (!tab) {
+  toml_table_t *fields = toml_parse_file(cf, errbuf, sizeof(errbuf));
+  if (!fields) {
     log_error("Cannot parse configuration file.");
     exit(1);
   }
   fclose(cf);
 
-  toml_table_t *system = toml_table_in(tab, "system");
-  if (!system) {
-    log_error("Missing [system] in configuration.");
-    exit(1);
-  }
+  toml_table_t *opts = toml_table_in(fields, "opts");
+  toml_table_t *sys = toml_table_in(fields, "system");
 
-  toml_table_t *bursts = toml_table_in(tab, "bursts");
-  if (!bursts) {
-    log_error("Missing [bursts] in configuration.");
-    exit(1);
-  }
-
-  toml_datum_t nf = toml_int_in(system, "nf");
-  toml_datum_t t1 = toml_double_in(system, "t1");
-  toml_datum_t t2 = toml_double_in(system, "t2");
-  toml_datum_t f1 = toml_double_in(system, "f1");
-  toml_datum_t f2 = toml_double_in(system, "f2");
-  toml_datum_t dt = toml_double_in(system, "dt");
-  toml_datum_t tsys = toml_double_in(system, "tsys");
-  toml_datum_t gain = toml_double_in(system, "gain");
-
-  if (!nf.ok) {
-    log_error("Need to specify the number of frequency channels.");
-    exit(1);
-  }
-
-  if (!t1.ok) {
-    log_error("Need to specify a starting time.");
-    exit(1);
-  }
-
-  if (!t2.ok) {
-    log_error("Need to specify a end time.");
-    exit(1);
-  }
-
-  if (!f1.ok) {
-    log_error("Need to specify the lowest frequency of the band.");
-    exit(1);
-  }
-
-  if (!f2.ok) {
-    log_error("Need to specify the highest frequency of the band.");
-    exit(1);
-  }
-
-  if (!dt.ok) {
-    log_error("Need to specify the sampling time.");
-    exit(1);
-  }
-
-  if (!tsys.ok) {
-    log_error("Need to specify the system temperature.");
-    exit(1);
-  }
-
-  if (!gain.ok) {
-    log_error("Need to specify the system gain.");
-    exit(1);
-  }
+  toml_datum_t nf = toml_int_in(sys, "nchan");
+  toml_datum_t band = toml_int_in(sys, "band");
+  toml_datum_t dt = toml_double_in(sys, "tsamp");
+  toml_datum_t nantennas = toml_int_in(sys, "nantennas");
+  toml_datum_t arraytype = toml_string_in(sys, "arraytype");
+  toml_datum_t debugfile = toml_string_in(opts, "debugfile");
 
   Config cfg;
-  cfg.nf = nf.u.i;
-  cfg.t1 = t1.u.d;
-  cfg.t2 = t2.u.d;
-  cfg.f1 = f1.u.d;
-  cfg.f2 = f2.u.d;
-  cfg.dt = dt.u.d;
-  cfg.tsys = tsys.u.d;
-  cfg.gain = gain.u.d;
-  cfg.bw = cfg.f2 - cfg.f1;
+  cfg.nf = (nf.ok) ? nf.u.i : 4096;
+  cfg.dt = (dt.ok) ? dt.u.d : 1.31072e-3;
+  switch (band.u.i) {
+  case 2:
+    log_error("Band 2 not yet supported.");
+    exit(1);
+  case 3:
+    cfg.fl = 300.0;
+    cfg.fh = 500.0;
+    cfg.tsys = 165.0;
+    cfg.antgain = 0.38;
+    break;
+  case 4:
+    cfg.fl = 550.0;
+    cfg.fh = 750.0;
+    cfg.tsys = 100.0;
+    cfg.antgain = 0.32;
+    break;
+  case 5:
+    cfg.fl = 1000.0;
+    cfg.fh = 1400.0;
+    cfg.tsys = 75.0;
+    cfg.antgain = 0.22;
+    break;
+  default:
+    log_error("This band does not exist at the GMRT.");
+    exit(1);
+  }
+  cfg.bw = cfg.fh - cfg.fl;
   cfg.df = cfg.bw / (double)cfg.nf;
+  cfg.sysgain = cfg.antgain * nantennas.u.i;
 
-  log_info("Start time = %.2f s.", cfg.t1);
-  log_info("End time = %.2f s.", cfg.t2);
-  log_info("Lowest frequency = %.2f MHz.", cfg.f1);
-  log_info("Highest frequency = %.2f MHz.", cfg.f2);
+  log_info("Lowest frequency = %.2f MHz.", cfg.fl);
+  log_info("Highest frequency = %.2f MHz.", cfg.fh);
   log_info("Bandwidth = %.2f MHz.", cfg.bw);
   log_info("Channel width = %.2f kHz.", cfg.df * 1e3);
   log_info("Number of channels = %d.", cfg.nf);
   log_info("Sampling time = %e s.", cfg.dt);
   log_info("System temperature = %.2f K.", cfg.tsys);
-  log_info("System gain = %.2f Jy / K.", cfg.gain);
+  log_info("Antenna gain = %.2f Jy / K", cfg.antgain);
+  log_info("System gain = %.2f Jy / K.", cfg.sysgain);
 
   /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
   if (debug->count > 0) {
-    dump = fopen("temp.raw", "w");
+    dump = fopen(debugfile.u.s, "w");
     if (dump == NULL) {
       log_error("Could not open file.");
       exit(1);
@@ -415,9 +385,12 @@ int main(int argc, char *argv[]) {
       }
     }
     if (flag == 1) log_debug("Ready!");
-    double blktime = ((double)BLKSIZE / 4096) * cfg.dt;
-    log_debug("Reading block no. %d", currentReadBlock);
-    log_debug("At t = %f s in the data.", (double)currentReadBlock * blktime);
+
+    int blknt = BLKSIZE / 4096;
+    long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
+    long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
+    double blktime = blknt * cfg.dt * (double)currentReadBlock;
+    log_debug("Reading block no. %d, t = %.2lf s.", currentReadBlock, blktime);
 
     if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
       log_debug("Realigning...");
@@ -437,7 +410,6 @@ int main(int argc, char *argv[]) {
              ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
              ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
              ((((raw[i + 3] << 2) & 0xc0)));
-
       raw[i + 3] = (temp & 0x03);
       raw[i + 2] = (temp & 0x0c) >> 2;
       raw[i + 1] = (temp & 0x30) >> 4;
@@ -449,7 +421,6 @@ int main(int argc, char *argv[]) {
     /*==================================================================*/
 
     if (frbs->count > 0) {
-      log_info("Weaving in %d FRB(s) into shared memory.", frbs->count);
       for (int idx = 0; idx < frbs->count; ++idx) {
         /* Get the burst's data and metadata. */
         FILE *bf = fopen(frbs->filename[idx], "r");
@@ -465,50 +436,42 @@ int main(int argc, char *argv[]) {
         fread(&width, sizeof(double), 1, bf);
         fread(&tburst, sizeof(double), 1, bf);
 
-        int *rows = (int *)malloc(nnz * sizeof(int));
-        int *cols = (int *)malloc(nnz * sizeof(int));
-        float *fluxes = (float *)malloc(nnz * sizeof(float));
-        if (nnz > 0) {
-          for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
-          for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
-          for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
-        } else {
+        if (nnz == 0) {
           log_warn("Cannot inject since no burst in the file.");
           continue;
         }
 
-        /* Set the seed for injection. */
-        long seed = set_seed();
+        int *rows = (int *)malloc(nnz * sizeof(int));
+        int *cols = (int *)malloc(nnz * sizeof(int));
+        float *fluxes = (float *)malloc(nnz * sizeof(float));
+        for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
+
+        long seed = set_seed();                /* Set the seed for injection. */
+        long offset = (long)(tburst / cfg.dt); /* Burst offset. */
+        double sigma =
+            cfg.tsys / cfg.sysgain /
+            sqrt(2 * cfg.dt * (cfg.df * 1e6)); /* Ideal RMS calculation. */
 
         /* Begin injection. */
         for (int i = 0; i < nnz; ++i) {
-          float flux = fluxes[i];
-          double sigma =
-              cfg.tsys / cfg.gain / sqrt(2 * cfg.dt * (cfg.df * 1e6));
+          long I = (offset + (long)rows[i]) * (long)cfg.nf;
 
-          long offset = (long)(tburst / cfg.dt);
-          long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
-          long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
-          long I = (offset + (long)rows[i]) * (long)cfg.nf + (long)cols[i];
+          /* Flip the band if it is Band 4 at the GMRT, otherwise do nothing. */
+          if (band.u.i == 4)
+            I += (cfg.nf - 1 - (long)cols[i]);
+          else
+            I += (long)cols[i];
 
-          if ((I <= blkbeg) || (I >= blkend))
-            break;
-          else {
-            if (i == 0) {
-              log_info(
-                  "Injecting FRB %d with DM = %lf pc per cm^-3, flux = %lf Jy, "
-                  "width = %lf s, at %lf s in the stream.",
-                  idx + 1, dm, flux, width, tburst);
-            }
-          }
+          if ((I <= blkbeg) || (I >= blkend)) break;
           I = I % (long)BLKSIZE;
-
-          int out;
           int in = raw[I];
+          int out;
 
           double lvl = 1;
           double plvl1, plvl2, plvl3;
-          double signal = flux / sigma;
+          double signal = fluxes[i] / sigma;
           double pval = random_deviate(&seed);
 
           if (in == 3)
@@ -551,21 +514,15 @@ int main(int argc, char *argv[]) {
               out = 0;
           }
           raw[I] = out;
-          if (i == nnz - 1)
-            log_info("Injection successful for FRB %d.", idx + 1);
         }
         free(rows);
         free(cols);
         free(fluxes);
         fclose(bf);
       }
-    } else {
-      log_warn("No file(s) specified for the simulated FRB(s).");
-      log_warn("Arachne won't weave in anything into shared memory.");
     }
 
     if (debug->count > 0) fwrite(raw, 1, BLKSIZE, dump);
-
     memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
