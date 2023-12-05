@@ -96,7 +96,7 @@ static void handler(int _) {
   exit(_);
 }
 
-/* Trim padding and spaces from a string. */
+/* Trim out whitespace and nulls from a string. */
 char *trim(char *str) {
   size_t len = 0;
   char *begp = str;
@@ -130,21 +130,32 @@ char *trim(char *str) {
   return str;
 }
 
-/* Basic functions for:
- *  1. finding the least of two numbers.
- *  2. finding the greater of two numbers.
- *  3. clipping a number between two values.
- *  4. calculating the probability of a Gaussian random variable.
- */
-double min(double x, double y) { return (x < y) ? x : y; }
-double max(double x, double y) { return (x > y) ? x : y; }
-double clip(double x, double x1, double x2) {
-  return (x >= x1 && x < x2) ? x : ((x < x1) ? x1 : x2);
+/* Find the lesser of two numbers. */
+double min(double x1, double x2) {
+  if (x1 < x2) return x1;
+  return x2;
 }
+
+/* Find the greater of two numbers. */
+double max(double x1, double x2) {
+  if (x1 > x2) return x1;
+  return x2;
+}
+
+/* Clip a number b/w two values. */
+double clip(double x, double x1, double x2) {
+  if (x >= x1 && x < x2) return x;
+  if (x < x1) return x1;
+  return x2;
+}
+
+/* Find the probability of a Gaussian random variable. */
 double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
 
-/* Functions for random number generation. */
+/* Set the seed for the RNG. */
 long set_seed() { return -time(NULL); }
+
+/* Get a random number from the RNG b/w 0 and 1. */
 double random_deviate(long *seed) {
   if (*seed < 0) {
     init_genrand(-(*seed));
@@ -223,26 +234,10 @@ int main(int argc, char *argv[]) {
 
   print_logo();
 
-  FILE *logfile = fopen("arachne.log", "w");
-  if (logfile == NULL) {
-    log_error("Could not open file for logging.");
-    exit(1);
-  }
-
-  int loglvl = LOG_INFO;
-  if (debug->count > 0) loglvl = LOG_DEBUG;
-
-  log_set_level(loglvl);
-  log_add_fp(logfile, loglvl);
-  if (verbose->count == 0) log_set_quiet(true);
-
   if (cfgfile->count == 0) {
-    log_error("No configuration file specified.");
+    printf("No configuration file specified.\n");
     exit(1);
   }
-
-  if (frbs->count > 0)
-    log_warn("No FRBs will be injected since none specified.");
 
   /*==========================================================================*/
   /*========================= CONFIGURATION PARSING ==========================*/
@@ -264,12 +259,36 @@ int main(int argc, char *argv[]) {
   toml_table_t *opts = toml_table_in(fields, "opts");
   toml_table_t *sys = toml_table_in(fields, "system");
 
+  toml_datum_t debugmode = toml_bool_in(opts, "debug");
+  toml_datum_t verbmode = toml_bool_in(opts, "verbose");
+  toml_datum_t debugfile = toml_string_in(opts, "debugfile");
+
   toml_datum_t nf = toml_int_in(sys, "nchan");
   toml_datum_t band = toml_int_in(sys, "band");
   toml_datum_t dt = toml_double_in(sys, "tsamp");
   toml_datum_t nantennas = toml_int_in(sys, "nantennas");
   toml_datum_t arraytype = toml_string_in(sys, "arraytype");
-  toml_datum_t debugfile = toml_string_in(opts, "debugfile");
+
+  /*==========================================================================*/
+  /*============================= LOGGING SETUP ==============================*/
+  /*==========================================================================*/
+
+  FILE *logfile = fopen("arachne.log", "w");
+  if (logfile == NULL) {
+    printf("Could not open file for logging.\n");
+    exit(1);
+  }
+
+  int loglvl = LOG_INFO;
+  if ((debug->count > 0) || (debugmode.u.b)) loglvl = LOG_DEBUG;
+
+  log_set_level(loglvl);
+  log_add_fp(logfile, loglvl);
+  if (!((verbose->count > 0) || verbmode.u.b)) log_set_quiet(true);
+
+  /*==========================================================================*/
+  /*========================== CONFIGURATION SETUP ===========================*/
+  /*==========================================================================*/
 
   Config cfg;
   cfg.nf = (nf.ok) ? nf.u.i : 4096;
@@ -316,13 +335,17 @@ int main(int argc, char *argv[]) {
 
   /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
-  if (debug->count > 0) {
+  if ((debug->count > 0) || (debugmode.u.b)) {
     dump = fopen(debugfile.u.s, "w");
     if (dump == NULL) {
       log_error("Could not open file.");
       exit(1);
     }
   }
+
+  /* Check if we injecting something. */
+  if (frbs->count == 0)
+    log_warn("No FRBs will be injected since none specified.");
 
   /*==========================================================================*/
   /*======================= SHARED MEMORY SHENANIGANS ========================*/
@@ -478,7 +501,6 @@ int main(int argc, char *argv[]) {
             out = 3;
           else if (in == 2) {
             plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
-
             if (pval < plvl1)
               out = 2;
             else
@@ -489,7 +511,6 @@ int main(int argc, char *argv[]) {
             plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
                              prob(max(-signal, -lvl))) /
                                 (0.5 - prob(-lvl));
-
             if (pval < plvl1)
               out = 3;
             else if (pval < plvl2)
@@ -503,7 +524,6 @@ int main(int argc, char *argv[]) {
                                 prob(-lvl);
             plvl3 = plvl2 + (prob(min(-signal, -lvl)) - prob(-lvl - signal)) /
                                 prob(-lvl);
-
             if (pval < plvl1)
               out = 3;
             else if (pval < plvl2)
@@ -522,7 +542,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (debug->count > 0) fwrite(raw, 1, BLKSIZE, dump);
+    if ((debug->count > 0) || (debugmode.u.b)) fwrite(raw, 1, BLKSIZE, dump);
     memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;

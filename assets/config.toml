@@ -1,4 +1,6 @@
 [opts]
+debug = true
+verbose = true
 debugfile = "temp.raw"
 
 [system]
