@@ -1,4 +1,5 @@
 [opts]
+dump = true
 debug = true
 verbose = true
 debugfile = "temp.raw"

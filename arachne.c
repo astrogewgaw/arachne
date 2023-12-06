@@ -259,6 +259,7 @@ int main(int argc, char *argv[]) {
   toml_table_t *opts = toml_table_in(fields, "opts");
   toml_table_t *sys = toml_table_in(fields, "system");
 
+  toml_datum_t dumpmode = toml_bool_in(opts, "dump");
   toml_datum_t debugmode = toml_bool_in(opts, "debug");
   toml_datum_t verbmode = toml_bool_in(opts, "verbose");
   toml_datum_t debugfile = toml_string_in(opts, "debugfile");
@@ -335,7 +336,7 @@ int main(int argc, char *argv[]) {
 
   /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
-  if ((debug->count > 0) || (debugmode.u.b)) {
+  if (dumpmode.u.b) {
     dump = fopen(debugfile.u.s, "w");
     if (dump == NULL) {
       log_error("Could not open file.");
