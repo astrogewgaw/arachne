@@ -543,7 +543,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if ((debug->count > 0) || (debugmode.u.b)) fwrite(raw, 1, BLKSIZE, dump);
+    if (dumpmode.u.b) fwrite(raw, 1, BLKSIZE, dump);
     memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
@@ -553,8 +553,8 @@ int main(int argc, char *argv[]) {
     BufWrite->curr_blk += 1;
     recNumWrite = (recNumWrite + 1) % MAXBLKS;
   }
-  free(raw);    /* Free the memory allocated for data. */
-  fclose(dump); /* Close the file opened for debugging. */
+  free(raw);                      /* Free the memory allocated for data. */
+  if (dumpmode.u.b) fclose(dump); /* Close the file opened for debugging. */
 
 /* Free up memory if and when the argument parsing exits. */
 exit:
