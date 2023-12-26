@@ -1,10 +1,9 @@
 /*
- *                             __
- *      ____ __________ ______/ /_  ____  ___
- *     / __ `/ ___/ __ `/ ___/ __ \/ __ \/ _ \
- *    / /_/ / /  / /_/ / /__/ / / / / / /  __/
- *    \__,_/_/   \__,_/\___/_/ /_/_/ /_/\___/
- *
+  ▄▀▄ █▀▄ ▄▀▄ ▄▀▀ █▄█ █▄ █ ██▀
+  █▀█ █▀▄ █▀█ ▀▄▄ █ █ █ ▀█ █▄▄
+
+  Weave in fake FRBs into live GMRT data.
+  Code: https://github.com/astrogewgaw/arachne.
  */
 
 #include <ctype.h>
@@ -167,12 +166,8 @@ double random_deviate(long *seed) {
 /* Print Arachne's logo. */
 void print_logo() {
   char *logo = "\n"
-               "                         __             \n"
-               "  ____ __________ ______/ /_  ____  ___ \n"
-               " / __ `/ ___/ __ `/ ___/ __ \\/ __ \\/ _ \\\n"
-               "/ /_/ / /  / /_/ / /__/ / / / / / /  __/\n"
-               "\\__,_/_/   \\__,_/\\___/_/ /_/_/ /_/\\___/ \n"
-               "                                        ";
+               " ▄▀▄ █▀▄ ▄▀▄ ▄▀▀ █▄█ █▄ █ ██▀\n"
+               " █▀█ █▀▄ █▀█ ▀▄▄ █ █ █ ▀█ █▄▄\n";
 
   printf("\e[1m%s\e[m\n\n", logo);
   printf("\e[1mWeave in fake FRBs into live GMRT data.\e[m\n");
