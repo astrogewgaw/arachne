@@ -1,15 +1,12 @@
-[system]
-t1 = 0
-t2 = 180
-f1 = 300
-f2 = 500
-nf = 4096
-tsys = 165
-gain = 7.60
-dt = 1.31072e-3
+[opts]
+dump = true
+debug = true
+verbose = true
+debugfile = "temp.raw"
 
-[bursts]
-flux = 0.5
-dm = 500.0
-width = 5e-3
-tarrival = 90.0
+[system]
+band = 3
+nchan = 4096
+nantennas = 20
+tsamp = 1.31072e-3
+arraytype = "phased"
