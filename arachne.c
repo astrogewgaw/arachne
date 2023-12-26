@@ -1,5 +1,15 @@
+/*
+  ▄▀▄ █▀▄ ▄▀▄ ▄▀▀ █▄█ █▄ █ ██▀
+  █▀█ █▀▄ █▀█ ▀▄▄ █ █ █ ▀█ █▄▄
+
+  Weave in fake FRBs into live GMRT data.
+  Code: https://github.com/astrogewgaw/arachne.
+ */
+
 #include <ctype.h>
+#include <math.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,10 +17,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+/* External libraries. */
 #include "extern/argtable3.h" // For argument parsing.
 #include "extern/log.h"       // For logging.
+#include "extern/mt19937.h"   // For random number generation.
 #include "extern/toml.h"      // For parsing TOML files.
 
+/* Arachne's version number. */
 #define ARACHNE_VERSION "0.1.0"
 
 /* SHARED MEMORY SHENANIGANS!
@@ -32,20 +45,6 @@
 #define OUT_BUFKEY 5032
 #define BLKSIZE (32 * 512 * 4096)
 #define TOTALSIZE (long)(BLKSIZE) * (long)(MAXBLKS)
-
-/* Struct to store program configuration. */
-typedef struct {
-  int nf;      // Number of channels.
-  double t1;   // Starting time.
-  double t2;   // End time.
-  double f1;   // Lowest frequency.
-  double f2;   // Highest frequency.
-  double dt;   // Sampling time.
-  double df;   // Channel width.
-  double bw;   // Bandwidth.
-  double tsys; // System temperature.
-  double gain; // System gain.
-} Config;
 
 /* Struct for storing data from the ring buffer. */
 typedef struct {
@@ -71,9 +70,22 @@ typedef struct {
   double blk_nano[MAXBLKS];
 } Header;
 
+/* Struct to store program configuration. */
+typedef struct {
+  int nf;         // Number of channels.
+  double fl;      // Lowest frequency.
+  double fh;      // Highest frequency.
+  double dt;      // Sampling time.
+  double df;      // Channel width.
+  double bw;      // Bandwidth.
+  double tsys;    // System temperature.
+  double antgain; // Antenna gain.
+  double sysgain; // System gain.
+} Config;
+
 /* Code to handle SIGINT. SIGINT is the signal sent when
  * we press Ctrl+C. One can think of SIGINT as a request
- * to intrrupt or terminate the program sent by the user.
+ * to interrupt or terminate the program sent by the user.
  * We choose to terminate the program when this happens.
  */
 static volatile sig_atomic_t keep = 1;
@@ -83,6 +95,7 @@ static void handler(int _) {
   exit(_);
 }
 
+/* Trim out whitespace and nulls from a string. */
 char *trim(char *str) {
   size_t len = 0;
   char *begp = str;
@@ -116,24 +129,75 @@ char *trim(char *str) {
   return str;
 }
 
+/* Find the lesser of two numbers. */
+double min(double x1, double x2) {
+  if (x1 < x2) return x1;
+  return x2;
+}
+
+/* Find the greater of two numbers. */
+double max(double x1, double x2) {
+  if (x1 > x2) return x1;
+  return x2;
+}
+
+/* Clip a number b/w two values. */
+double clip(double x, double x1, double x2) {
+  if (x >= x1 && x < x2) return x;
+  if (x < x1) return x1;
+  return x2;
+}
+
+/* Find the probability of a Gaussian random variable. */
+double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
+
+/* Set the seed for the RNG. */
+long set_seed() { return -time(NULL); }
+
+/* Get a random number from the RNG b/w 0 and 1. */
+double random_deviate(long *seed) {
+  if (*seed < 0) {
+    init_genrand(-(*seed));
+    *seed = 1;
+  }
+  return genrand_real1();
+}
+
+/* Print Arachne's logo. */
+void print_logo() {
+  char *logo = "\n"
+               " ▄▀▄ █▀▄ ▄▀▄ ▄▀▀ █▄█ █▄ █ ██▀\n"
+               " █▀█ █▀▄ █▀█ ▀▄▄ █ █ █ ▀█ █▄▄\n";
+
+  printf("\e[1m%s\e[m\n\n", logo);
+  printf("\e[1mWeave in fake FRBs into live GMRT data.\e[m\n");
+  printf("\e[1mCode: \e[4mhttps://github.com/astrogewgaw/arachne.\e[m\n\n");
+}
+
+/* The main function. */
 int main(int argc, char *argv[]) {
   /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
 
-  /* Code to handle argument parsing. */
+  /*==========================================================================*/
+  /*========================= ARGUMENT PARSING ===============================*/
+  /*==========================================================================*/
+
   struct arg_lit *help;
   struct arg_lit *debug;
+  struct arg_file *frbs;
   struct arg_lit *version;
+  struct arg_lit *verbose;
   struct arg_file *cfgfile;
-  struct arg_file *burstfile;
   struct arg_end *end;
 
   void *argtable[] = {
-      help = arg_litn("h", "help", 0, 1, "Display help."),
-      version = arg_litn("V", "version", 0, 1, "Display version."),
-      debug = arg_litn("d", "debug", 0, 1, "Activate debugging mode."),
-      cfgfile = arg_file0(NULL, "config", "<file>", "Configuration file."),
-      burstfile = arg_file0(NULL, "burst", "<file>", "Simulated burst file."),
+      help = arg_litn("h", NULL, 0, 1, "Display help."),
+      version = arg_litn("V", NULL, 0, 1, "Display version."),
+      debug = arg_litn("d", NULL, 0, 1, "Activate debugging mode."),
+      verbose = arg_litn("v", NULL, 0, 1, "Enable verbose output."),
+      cfgfile = arg_file0("c", NULL, "<FILE>", "Specify config file."),
+      frbs = arg_filen(NULL, NULL, "<FRB>", 0, argc + 2, "FRBs to inject."),
       end = arg_end(20),
   };
 
@@ -141,13 +205,10 @@ int main(int argc, char *argv[]) {
   char progname[] = "arachne";
   int nerrors = arg_parse(argc, argv, argtable);
 
-  log_set_level(LOG_INFO);
-  if (debug->count > 0) log_set_level(LOG_DEBUG);
-
   if (help->count > 0) {
+    print_logo();
     printf("Usage: %s", progname);
     arg_print_syntax(stdout, argtable, "\n");
-    printf("Weave in fake FRBs into telescope data in real-time.\n\n");
     arg_print_glossary(stdout, argtable, "  %-25s %s\n");
     exitcode = 0;
     goto exit;
@@ -166,232 +227,127 @@ int main(int argc, char *argv[]) {
     goto exit;
   }
 
+  print_logo();
+
   if (cfgfile->count == 0) {
-    log_error("No configuration file specified.");
+    printf("No configuration file specified.\n");
     exit(1);
   }
 
-  /* Code to read in the configuration file. */
+  /*==========================================================================*/
+  /*========================= CONFIGURATION PARSING ==========================*/
+  /*==========================================================================*/
+
   FILE *cf = fopen(*cfgfile->filename, "r");
   char errbuf[200];
   if (!cf) {
     log_error("Cannot open configuration file.");
     exit(1);
   }
-  toml_table_t *tab = toml_parse_file(cf, errbuf, sizeof(errbuf));
-  if (!tab) {
+  toml_table_t *fields = toml_parse_file(cf, errbuf, sizeof(errbuf));
+  if (!fields) {
     log_error("Cannot parse configuration file.");
     exit(1);
   }
   fclose(cf);
 
-  toml_table_t *system = toml_table_in(tab, "system");
-  if (!system) {
-    log_error("Missing [system] in configuration.");
+  toml_table_t *opts = toml_table_in(fields, "opts");
+  toml_table_t *sys = toml_table_in(fields, "system");
+
+  toml_datum_t dumpmode = toml_bool_in(opts, "dump");
+  toml_datum_t debugmode = toml_bool_in(opts, "debug");
+  toml_datum_t verbmode = toml_bool_in(opts, "verbose");
+  toml_datum_t debugfile = toml_string_in(opts, "debugfile");
+
+  toml_datum_t nf = toml_int_in(sys, "nchan");
+  toml_datum_t band = toml_int_in(sys, "band");
+  toml_datum_t dt = toml_double_in(sys, "tsamp");
+  toml_datum_t nantennas = toml_int_in(sys, "nantennas");
+  toml_datum_t arraytype = toml_string_in(sys, "arraytype");
+
+  /*==========================================================================*/
+  /*============================= LOGGING SETUP ==============================*/
+  /*==========================================================================*/
+
+  FILE *logfile = fopen("arachne.log", "w");
+  if (logfile == NULL) {
+    printf("Could not open file for logging.\n");
     exit(1);
   }
 
-  toml_table_t *bursts = toml_table_in(tab, "bursts");
-  if (!bursts) {
-    log_error("Missing [bursts] in configuration.");
-    exit(1);
-  }
+  int loglvl = LOG_INFO;
+  if ((debug->count > 0) || (debugmode.u.b)) loglvl = LOG_DEBUG;
 
-  toml_datum_t nf = toml_int_in(system, "nf");
-  toml_datum_t t1 = toml_double_in(system, "t1");
-  toml_datum_t t2 = toml_double_in(system, "t2");
-  toml_datum_t f1 = toml_double_in(system, "f1");
-  toml_datum_t f2 = toml_double_in(system, "f2");
-  toml_datum_t dt = toml_double_in(system, "dt");
-  toml_datum_t tsys = toml_double_in(system, "tsys");
-  toml_datum_t gain = toml_double_in(system, "gain");
+  log_set_level(loglvl);
+  log_add_fp(logfile, loglvl);
+  if (!((verbose->count > 0) || verbmode.u.b)) log_set_quiet(true);
 
-  if (!nf.ok) {
-    log_error("Need to specify the number of frequency channels.");
-    exit(1);
-  }
-
-  if (!t1.ok) {
-    log_error("Need to specify a starting time.");
-    exit(1);
-  }
-
-  if (!t2.ok) {
-    log_error("Need to specify a end time.");
-    exit(1);
-  }
-
-  if (!f1.ok) {
-    log_error("Need to specify the lowest frequency of the band.");
-    exit(1);
-  }
-
-  if (!f2.ok) {
-    log_error("Need to specify the highest frequency of the band.");
-    exit(1);
-  }
-
-  if (!dt.ok) {
-    log_error("Need to specify the sampling time.");
-    exit(1);
-  }
-
-  if (!tsys.ok) {
-    log_error("Need to specify the system temperature.");
-    exit(1);
-  }
-
-  if (!gain.ok) {
-    log_error("Need to specify the system gain.");
-    exit(1);
-  }
+  /*==========================================================================*/
+  /*========================== CONFIGURATION SETUP ===========================*/
+  /*==========================================================================*/
 
   Config cfg;
-  cfg.nf = nf.u.i;
-  cfg.t1 = t1.u.d;
-  cfg.t2 = t2.u.d;
-  cfg.f1 = f1.u.d;
-  cfg.f2 = f2.u.d;
-  cfg.tsys = tsys.u.d;
-  cfg.gain = gain.u.d;
-  cfg.bw = cfg.f2 - cfg.f1;
+  cfg.nf = (nf.ok) ? nf.u.i : 4096;
+  cfg.dt = (dt.ok) ? dt.u.d : 1.31072e-3;
+  switch (band.u.i) {
+  case 2:
+    log_error("Band 2 not yet supported.");
+    exit(1);
+  case 3:
+    cfg.fl = 300.0;
+    cfg.fh = 500.0;
+    cfg.tsys = 165.0;
+    cfg.antgain = 0.38;
+    break;
+  case 4:
+    cfg.fl = 550.0;
+    cfg.fh = 750.0;
+    cfg.tsys = 100.0;
+    cfg.antgain = 0.32;
+    break;
+  case 5:
+    cfg.fl = 1000.0;
+    cfg.fh = 1400.0;
+    cfg.tsys = 75.0;
+    cfg.antgain = 0.22;
+    break;
+  default:
+    log_error("This band does not exist at the GMRT.");
+    exit(1);
+  }
+  cfg.bw = cfg.fh - cfg.fl;
   cfg.df = cfg.bw / (double)cfg.nf;
+  cfg.sysgain = cfg.antgain * nantennas.u.i;
 
-  log_info("Start time = %.2f s.", cfg.t1);
-  log_info("End time = %.2f s.", cfg.t2);
-  log_info("Lowest frequency = %.2f MHz.", cfg.f1);
-  log_info("Highest frequency = %.2f MHz.", cfg.f2);
+  log_info("Lowest frequency = %.2f MHz.", cfg.fl);
+  log_info("Highest frequency = %.2f MHz.", cfg.fh);
   log_info("Bandwidth = %.2f MHz.", cfg.bw);
   log_info("Channel width = %.2f kHz.", cfg.df * 1e3);
   log_info("Number of channels = %d.", cfg.nf);
-  log_info("Sampling time = %.2f s.", cfg.dt);
+  log_info("Sampling time = %e s.", cfg.dt);
   log_info("System temperature = %.2f K.", cfg.tsys);
-  log_info("System gain = %.2f Jy.", cfg.gain);
+  log_info("Antenna gain = %.2f Jy / K", cfg.antgain);
+  log_info("System gain = %.2f Jy / K.", cfg.sysgain);
 
-  /* Code to read in the file with the simulated FRB. */
-
-  if (burstfile->count == 0) {
-    log_warn("No file specified for the simulated FRB.");
-    log_warn("Arachne won't weave in anything into shared memory.");
-  } else {
-    FILE *bf = fopen(*burstfile->filename, "r");
-    char _fmt[64];
-    char _tmp[1024];
-    fread(&_tmp, sizeof(char), 64, bf);
-    strcpy(_fmt, trim(_tmp));
-
-    /* Initialise disposable variables. */
-    int _nf;
-    int _pos;
-    float _f1;
-    float _f2;
-    float _dt;
-    float _t1;
-    float _t2;
-    float _raj;
-    float _decj;
-    int _useang;
-    long _seed;
-    int _haslabels;
-    char _name[128];
-    char _posf[128];
-    char projid[128];
-    char _source[128];
-    char _observer[128];
-    char _telescope[128];
-
-    if (strcmp(_fmt, "FORMAT 1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_raj, sizeof(float), 1, bf);
-      fread(&_decj, sizeof(float), 1, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-    } else if (strcmp(_fmt, "FORMAT 1.1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_raj, sizeof(float), 1, bf);
-      fread(&_decj, sizeof(float), 1, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      fread(&_haslabels, sizeof(int), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else if (strcmp(_fmt, "FORMAT 1.2") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_pos, sizeof(int), 1, bf);
-      if (_pos == 1) {
-        fread(&_raj, sizeof(float), 1, bf);
-        fread(&_decj, sizeof(float), 1, bf);
-      } else
-        fread(&_posf, sizeof(char), 128, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      fread(&_haslabels, sizeof(int), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else if (strcmp(_fmt, "FORMAT 2.1") == 0) {
-      fread(&_name, sizeof(char), 128, bf);
-      fread(&_t1, sizeof(float), 1, bf);
-      fread(&_t2, sizeof(float), 1, bf);
-      fread(&_dt, sizeof(float), 1, bf);
-      fread(&_f1, sizeof(float), 1, bf);
-      fread(&_f2, sizeof(float), 1, bf);
-      fread(&_nf, sizeof(int), 1, bf);
-      fread(&_pos, sizeof(int), 1, bf);
-      if (_pos == 1) {
-        fread(&_raj, sizeof(float), 1, bf);
-        fread(&_decj, sizeof(float), 1, bf);
-      } else
-        fread(&_posf, sizeof(char), 128, bf);
-      fread(&_useang, sizeof(int), 1, bf);
-      fread(&_seed, sizeof(long), 1, bf);
-      if (_haslabels == 1) {
-        log_error("Don't support labels yet.");
-        exit(1);
-      }
-    } else {
-      log_error("Unable to process this file format.");
-      exit(1);
-    }
-  }
-
+  /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
-  if (debug->count > 0) {
-    /* Temporary file, created for debugging. */
-    dump = fopen("temp.raw", "w");
+  if (dumpmode.u.b) {
+    dump = fopen(debugfile.u.s, "w");
     if (dump == NULL) {
       log_error("Could not open file.");
       exit(1);
     }
   }
 
-  /* Code to setup reading in the raw data from the ring buffer,
-   * and writing it out to another one. Here we check whether the
-   * required shared memory exists, and whether we can create the
-   * other one.
-   */
-  unsigned char *raw = (unsigned char *)malloc(TOTALSIZE);
+  /* Check if we injecting something. */
+  if (frbs->count == 0)
+    log_warn("No FRBs will be injected since none specified.");
+
+  /*==========================================================================*/
+  /*======================= SHARED MEMORY SHENANIGANS ========================*/
+  /*==========================================================================*/
+
+  unsigned char *raw = (unsigned char *)malloc(BLKSIZE);
 
   int recNumRead = 0;
   int recNumWrite = 0;
@@ -432,13 +388,12 @@ int main(int argc, char *argv[]) {
   BufWrite->curr_rec = 0;
   BufWrite->curr_blk = 0;
   recNumWrite = (BufWrite->curr_rec) % MAXBLKS;
-
   HdrWrite->active = 1;
 
-  /* The infinite loop that keeps reading in the data and writing it
-   * out to another shared memory continuously, injecting the burst(s)
-   * at the right time.
-   */
+  /*==========================================================================*/
+  /*======================== MAIN EXECUTION LOOP =============================*/
+  /*==========================================================================*/
+
   while (keep) {
     int flag = 0;
     while (currentReadBlock == BufRead->curr_blk) {
@@ -450,10 +405,11 @@ int main(int argc, char *argv[]) {
     }
     if (flag == 1) log_debug("Ready!");
 
-    log_debug("Block being read = %d", currentReadBlock);
-    log_debug("Record being read = %d", recNumRead);
-    log_debug("Block being written = %d", BufRead->curr_blk);
-    log_debug("Record being written = %d", BufRead->curr_rec);
+    int blknt = BLKSIZE / 4096;
+    long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
+    long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
+    double blktime = blknt * cfg.dt * (double)currentReadBlock;
+    log_debug("Reading block no. %d, t = %.2lf s.", currentReadBlock, blktime);
 
     if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
       log_debug("Realigning...");
@@ -461,29 +417,129 @@ int main(int argc, char *argv[]) {
       currentReadBlock = BufRead->curr_blk - 1;
     }
 
-    long offread = (long)BLKSIZE * (long)recNumRead;
-    memcpy(raw + offread, BufRead->data + offread, BLKSIZE);
+    memcpy(raw, BufRead->data + (long)BLKSIZE * (long)recNumRead, BLKSIZE);
+
+    /*==================================================================*/
+    /*======================== REQUANTIZATION ==========================*/
+    /*==================================================================*/
 
     unsigned char temp = 0;
-    for (int i = offread; i < offread + BLKSIZE; i = i + 4) {
+    for (int i = 0; i < BLKSIZE; i = i + 4) {
       temp = ((((raw[i + 0] << 2) & 0xc0) >> 6) & 0x03) |
              ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
              ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
              ((((raw[i + 3] << 2) & 0xc0)));
-
-      /* TODO: Code for burst injection. */
-
       raw[i + 3] = (temp & 0x03);
       raw[i + 2] = (temp & 0x0c) >> 2;
       raw[i + 1] = (temp & 0x30) >> 4;
       raw[i + 0] = (temp & 0xc0) >> 6;
     }
 
-    long offwrite = (long)BLKSIZE * (long)recNumWrite;
-    memcpy(BufWrite->data + offwrite, raw + offwrite, BLKSIZE);
+    /*==================================================================*/
+    /*======================== FRB INJECTION ===========================*/
+    /*==================================================================*/
 
-    /* For debugging, write data to file for checks later. */
-    if (debug->count > 0) fwrite(raw + offread, 1, BLKSIZE, dump);
+    if (frbs->count > 0) {
+      for (int idx = 0; idx < frbs->count; ++idx) {
+        /* Get the burst's data and metadata. */
+        FILE *bf = fopen(frbs->filename[idx], "r");
+
+        long M, N, nnz = 0;
+        double dm, flux, width, tburst;
+
+        fread(&M, sizeof(long), 1, bf);
+        fread(&N, sizeof(long), 1, bf);
+        fread(&nnz, sizeof(long), 1, bf);
+        fread(&dm, sizeof(double), 1, bf);
+        fread(&flux, sizeof(double), 1, bf);
+        fread(&width, sizeof(double), 1, bf);
+        fread(&tburst, sizeof(double), 1, bf);
+
+        if (nnz == 0) {
+          log_warn("Cannot inject since no burst in the file.");
+          continue;
+        }
+
+        int *rows = (int *)malloc(nnz * sizeof(int));
+        int *cols = (int *)malloc(nnz * sizeof(int));
+        float *fluxes = (float *)malloc(nnz * sizeof(float));
+        for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
+
+        long seed = set_seed();                /* Set the seed for injection. */
+        long offset = (long)(tburst / cfg.dt); /* Burst offset. */
+        double sigma =
+            cfg.tsys / cfg.sysgain /
+            sqrt(2 * cfg.dt * (cfg.df * 1e6)); /* Ideal RMS calculation. */
+
+        /* Begin injection. */
+        for (int i = 0; i < nnz; ++i) {
+          long I = (offset + (long)rows[i]) * (long)cfg.nf;
+
+          /* Flip the band if it is Band 4 at the GMRT, otherwise do nothing. */
+          if (band.u.i == 4)
+            I += (cfg.nf - 1 - (long)cols[i]);
+          else
+            I += (long)cols[i];
+
+          if ((I <= blkbeg) || (I >= blkend)) break;
+          I = I % (long)BLKSIZE;
+          int in = raw[I];
+          int out;
+
+          double lvl = 1;
+          double plvl1, plvl2, plvl3;
+          double signal = fluxes[i] / sigma;
+          double pval = random_deviate(&seed);
+
+          if (in == 3)
+            out = 3;
+          else if (in == 2) {
+            plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
+            if (pval < plvl1)
+              out = 2;
+            else
+              out = 3;
+          } else if (in == 1) {
+            plvl1 =
+                (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl));
+            plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
+                             prob(max(-signal, -lvl))) /
+                                (0.5 - prob(-lvl));
+            if (pval < plvl1)
+              out = 3;
+            else if (pval < plvl2)
+              out = 2;
+            else
+              out = 1;
+          } else if (in == 0) {
+            plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl);
+            plvl2 = plvl1 + (prob(min(-signal + lvl, -lvl)) -
+                             prob(min(-signal, -lvl))) /
+                                prob(-lvl);
+            plvl3 = plvl2 + (prob(min(-signal, -lvl)) - prob(-lvl - signal)) /
+                                prob(-lvl);
+            if (pval < plvl1)
+              out = 3;
+            else if (pval < plvl2)
+              out = 2;
+            else if (pval < plvl3)
+              out = 1;
+            else
+              out = 0;
+          }
+          raw[I] = out;
+        }
+        free(rows);
+        free(cols);
+        free(fluxes);
+        fclose(bf);
+      }
+    }
+
+    if (dumpmode.u.b) fwrite(raw, 1, BLKSIZE, dump);
+    memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
     currentReadBlock++;
@@ -492,8 +548,8 @@ int main(int argc, char *argv[]) {
     BufWrite->curr_blk += 1;
     recNumWrite = (recNumWrite + 1) % MAXBLKS;
   }
-  free(raw);    /* Free the memory allocated for data. */
-  fclose(dump); /* Close the file opened for debugging. */
+  free(raw);                      /* Free the memory allocated for data. */
+  if (dumpmode.u.b) fclose(dump); /* Close the file opened for debugging. */
 
 /* Free up memory if and when the argument parsing exits. */
 exit:

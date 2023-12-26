@@ -27,3 +27,5 @@ cross:
 clean:
 	@echo "Cleaning..."
 	@rm -rf $(PROGRAM)
+	@rm -rf *.log
+	@rm -rf *.raw
