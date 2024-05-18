@@ -488,7 +488,7 @@ int main(int argc, char *argv[]) {
           int in = raw[I];
           int out;
 
-          double lvl = 1;
+          double lvl = 0.030765;
           double plvl1, plvl2, plvl3;
           double signal = fluxes[i] / sigma;
           double pval = random_deviate(&seed);
