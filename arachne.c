@@ -434,22 +434,6 @@ int main(int argc, char *argv[]) {
     memcpy(raw, BufRead->data + (long)BLKSIZE * (long)recNumRead, BLKSIZE);
 
     /*==================================================================*/
-    /*======================== REQUANTIZATION ==========================*/
-    /*==================================================================*/
-
-    unsigned char temp = 0;
-    for (int i = 0; i < BLKSIZE; i = i + 4) {
-      temp = ((((raw[i + 0] << 2) & 0xc0) >> 6) & 0x03) |
-             ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
-             ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
-             ((((raw[i + 3] << 2) & 0xc0)));
-      raw[i + 3] = (temp & 0x03);
-      raw[i + 2] = (temp & 0x0c) >> 2;
-      raw[i + 1] = (temp & 0x30) >> 4;
-      raw[i + 0] = (temp & 0xc0) >> 6;
-    }
-
-    /*==================================================================*/
     /*======================== FRB INJECTION ===========================*/
     /*==================================================================*/
 
@@ -511,44 +495,6 @@ int main(int argc, char *argv[]) {
           out = cal_bit_shift_prob(in, pval, lvl, signal);
           raw[I] = out;
         }
-          //======================== commented 2 bit FRB Injection ===========================*/
-          //  if (in == 3)
-          //   out = 3;
-          // else if (in == 2) {
-          //   plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);//P22 = 1 - P23
-          //   if (pval < plvl1)
-          //     out = 2;
-          //   else
-          //     out = 3;
-          // } else if (in == 1) {
-          //   plvl1 =
-          //       (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl)); //P13
-          //   plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
-          //                    prob(max(-signal, -lvl))) /
-          //                       (0.5 - prob(-lvl));//P12
-          //   if (pval < plvl1)
-          //     out = 3;
-          //   else if (pval < plvl2)
-          //     out = 2;
-          //   else
-          //     out = 1;
-          // } else if (in == 0) {
-          //   plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl); //P03
-          //   plvl2 = plvl1 + (prob(min(-signal + lvl, -lvl)) -
-          //                    prob(min(-signal, -lvl))) /
-          //                       prob(-lvl);//P02
-          //   plvl3 = plvl2 + (prob(min(-signal, -lvl)) - prob(-lvl - signal)) /
-          //                       prob(-lvl);//P01
-          //   if (pval < plvl1)
-          //     out = 3;
-          //   else if (pval < plvl2)
-          //     out = 2;
-          //   else if (pval < plvl3)
-          //     out = 1;
-          //   else
-          //     out = 0;
-          // }
-            
           free(rows);
           free(cols);
           free(fluxes);
