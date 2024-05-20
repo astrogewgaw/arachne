@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/sh/m.h>
+#include <sys/shm.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -486,7 +486,7 @@ int main(int argc, char *argv[]) {
         double sigma =
             cfg.tsys / cfg.sysgain /
             sqrt(2 * cfg.dt * (cfg.df * 1e6)); /* Ideal RMS calculation. */
-            
+
         /* Begin injection. */
         for (int i = 0; i < nnz; ++i) {
           long I = (offset + (long)rows[i]) * (long)cfg.nf;
