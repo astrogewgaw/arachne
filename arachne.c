@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/shm.h>
+// #include <sys/shm.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -166,13 +166,17 @@ double random_deviate(long *seed) {
 /* Calculate probability of shifting the bit: 8 bit injection */
 int cal_bit_shift_prob(int in, double pval, double lvl, double signal) {
   double plvl;
-  int out = in;
-  for (int m = 255 - in; m > 0; m--) {
-    plvl = (prob(min((in -127)*lvl, (in + m -127)*lvl - signal)) - prob(max((in -128)*lvl, (in + m -128)*lvl - signal)))/
-               (prob((in - 127)*lvl) - prob((in - 128)*lvl)); // prob n--> n+m
-    if (pval < plvl){
-      out = in + m;
-      break;
+  int out;
+  if (in == 255){
+    out = in;
+  } else {
+    for (int m = 255 - in; m >= 0; m--) {
+      plvl = ((prob(min((in - 127)*lvl, (in + m - 127)*lvl - signal)) - prob(max((in - 128)*lvl, (in + m - 128)*lvl - signal)))/
+                (prob((in - 127)*lvl) - prob((in - 128)*lvl))); // prob n--> n+m
+      if (pval < plvl){
+        out = in + m;
+        break;
+      }
     }
   }
   return out;
