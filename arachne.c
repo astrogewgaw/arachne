@@ -47,7 +47,8 @@
 #define TOTALSIZE (long)(BLKSIZE) * (long)(MAXBLKS)
 
 /* Struct for storing data from the ring buffer. */
-typedef struct {
+typedef struct
+{
   unsigned int flag;
   unsigned int curr_blk;
   unsigned int curr_rec;
@@ -59,7 +60,8 @@ typedef struct {
 } Buffer;
 
 /* Struct for storing the ring buffer's header. */
-typedef struct {
+typedef struct
+{
   unsigned int active;
   unsigned int status;
   double comptime;
@@ -71,7 +73,8 @@ typedef struct {
 } Header;
 
 /* Struct to store program configuration. */
-typedef struct {
+typedef struct
+{
   int nf;         // Number of channels.
   double fl;      // Lowest frequency.
   double fh;      // Highest frequency.
@@ -89,30 +92,37 @@ typedef struct {
  * We choose to terminate the program when this happens.
  */
 static volatile sig_atomic_t keep = 1;
-static void handler(int _) {
+static void handler(int _)
+{
   (void)_;
   keep = 0;
   exit(_);
 }
 
 /* Trim out whitespace and nulls from a string. */
-char *trim(char *str) {
+char *trim(char *str)
+{
   size_t len = 0;
   char *begp = str;
   char *endp = NULL;
-  if (str == NULL) {
+  if (str == NULL)
+  {
     return NULL;
   }
-  if (str[0] == '\0') {
+  if (str[0] == '\0')
+  {
     return str;
   }
   len = strlen(str);
   endp = str + len;
-  while (isspace((unsigned char)*begp)) {
+  while (isspace((unsigned char)*begp))
+  {
     ++begp;
   }
-  if (endp != begp) {
-    while (isspace((unsigned char)*(--endp)) && endp != begp) {
+  if (endp != begp)
+  {
+    while (isspace((unsigned char)*(--endp)) && endp != begp)
+    {
     }
   }
   if (begp != str && endp == begp)
@@ -120,8 +130,10 @@ char *trim(char *str) {
   else if (str + len - 1 != endp)
     *(endp + 1) = '\0';
   endp = str;
-  if (begp != str) {
-    while (*begp) {
+  if (begp != str)
+  {
+    while (*begp)
+    {
       *endp++ = *begp++;
     }
     *endp = '\0';
@@ -130,21 +142,28 @@ char *trim(char *str) {
 }
 
 /* Find the lesser of two numbers. */
-double min(double x1, double x2) {
-  if (x1 < x2) return x1;
+double min(double x1, double x2)
+{
+  if (x1 < x2)
+    return x1;
   return x2;
 }
 
 /* Find the greater of two numbers. */
-double max(double x1, double x2) {
-  if (x1 > x2) return x1;
+double max(double x1, double x2)
+{
+  if (x1 > x2)
+    return x1;
   return x2;
 }
 
 /* Clip a number b/w two values. */
-double clip(double x, double x1, double x2) {
-  if (x >= x1 && x < x2) return x;
-  if (x < x1) return x1;
+double clip(double x, double x1, double x2)
+{
+  if (x >= x1 && x < x2)
+    return x;
+  if (x < x1)
+    return x1;
   return x2;
 }
 
@@ -155,8 +174,10 @@ double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
 long set_seed() { return -time(NULL); }
 
 /* Get a random number from the RNG b/w 0 and 1. */
-double random_deviate(long *seed) {
-  if (*seed < 0) {
+double random_deviate(long *seed)
+{
+  if (*seed < 0)
+  {
     init_genrand(-(*seed));
     *seed = 1;
   }
@@ -164,25 +185,27 @@ double random_deviate(long *seed) {
 }
 
 /* Calculate probability of shifting the bit: 8 bit injection */
-int cal_bit_shift_prob(int in, double pval, double lvl, double signal) {
+int cal_bit_shift_prob(int in, double pval, double lvl, double signal)
+{
   double plvl;
-  int out;
-  if (in == 255){
-    out = in;
-  } else {
-    for (int m = 255 - in; m >= 0; m--) {
-      plvl = ((prob(min((in - 127)*lvl, (in + m - 127)*lvl - signal)) - prob(max((in - 128)*lvl, (in + m - 128)*lvl - signal)))/
-                (prob((in - 127)*lvl) - prob((in - 128)*lvl))); // prob n--> n+m
-      if (pval < plvl){
-        out = in + m;
-        break;
-      }
+  int out = in;
+
+  for (int m = 255 - in; m >= 0; m--)
+  {
+    plvl = ((prob(min((in - 127) * lvl, (in + m - 127) * lvl - signal)) - prob(max((in - 128) * lvl, (in + m - 128) * lvl - signal))) /
+            (prob((in - 127) * lvl) - prob((in - 128) * lvl))); // prob n--> n+m
+    if (pval < plvl)
+    {
+      pval = plvl;
+      out = in + m;
     }
   }
+
   return out;
 }
 /* Print Arachne's logo. */
-void print_logo() {
+void print_logo()
+{
   char *logo = "\n"
                " ▄▀▄ █▀▄ ▄▀▄ ▄▀▀ █▄█ █▄ █ ██▀\n"
                " █▀█ █▀▄ █▀█ ▀▄▄ █ █ █ ▀█ █▄▄\n";
@@ -193,7 +216,8 @@ void print_logo() {
 }
 
 /* The main function. */
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
   /* Attach the handler to SIGINT. */
   signal(SIGINT, handler);
 
@@ -223,7 +247,8 @@ int main(int argc, char *argv[]) {
   char progname[] = "arachne";
   int nerrors = arg_parse(argc, argv, argtable);
 
-  if (help->count > 0) {
+  if (help->count > 0)
+  {
     print_logo();
     printf("Usage: %s", progname);
     arg_print_syntax(stdout, argtable, "\n");
@@ -232,13 +257,15 @@ int main(int argc, char *argv[]) {
     goto exit;
   }
 
-  if (version->count > 0) {
+  if (version->count > 0)
+  {
     printf("Version: %s\n", ARACHNE_VERSION);
     exitcode = 0;
     goto exit;
   }
 
-  if (nerrors > 0) {
+  if (nerrors > 0)
+  {
     arg_print_errors(stdout, end, progname);
     printf("Try '%s --help' for more information.\n", progname);
     exitcode = 1;
@@ -247,7 +274,8 @@ int main(int argc, char *argv[]) {
 
   print_logo();
 
-  if (cfgfile->count == 0) {
+  if (cfgfile->count == 0)
+  {
     printf("No configuration file specified.\n");
     exit(1);
   }
@@ -258,12 +286,14 @@ int main(int argc, char *argv[]) {
 
   FILE *cf = fopen(*cfgfile->filename, "r");
   char errbuf[200];
-  if (!cf) {
+  if (!cf)
+  {
     log_error("Cannot open configuration file.");
     exit(1);
   }
   toml_table_t *fields = toml_parse_file(cf, errbuf, sizeof(errbuf));
-  if (!fields) {
+  if (!fields)
+  {
     log_error("Cannot parse configuration file.");
     exit(1);
   }
@@ -288,17 +318,20 @@ int main(int argc, char *argv[]) {
   /*==========================================================================*/
 
   FILE *logfile = fopen("arachne.log", "w");
-  if (logfile == NULL) {
+  if (logfile == NULL)
+  {
     printf("Could not open file for logging.\n");
     exit(1);
   }
 
   int loglvl = LOG_INFO;
-  if ((debug->count > 0) || (debugmode.u.b)) loglvl = LOG_DEBUG;
+  if ((debug->count > 0) || (debugmode.u.b))
+    loglvl = LOG_DEBUG;
 
   log_set_level(loglvl);
   log_add_fp(logfile, loglvl);
-  if (!((verbose->count > 0) || verbmode.u.b)) log_set_quiet(true);
+  if (!((verbose->count > 0) || verbmode.u.b))
+    log_set_quiet(true);
 
   /*==========================================================================*/
   /*========================== CONFIGURATION SETUP ===========================*/
@@ -307,7 +340,8 @@ int main(int argc, char *argv[]) {
   Config cfg;
   cfg.nf = (nf.ok) ? nf.u.i : 4096;
   cfg.dt = (dt.ok) ? dt.u.d : 1.31072e-3;
-  switch (band.u.i) {
+  switch (band.u.i)
+  {
   case 2:
     log_error("Band 2 not yet supported.");
     exit(1);
@@ -349,9 +383,11 @@ int main(int argc, char *argv[]) {
 
   /* If debugging, dump data from ring buffer to file. */
   FILE *dump;
-  if (dumpmode.u.b) {
+  if (dumpmode.u.b)
+  {
     dump = fopen(debugfile.u.s, "w");
-    if (dump == NULL) {
+    if (dump == NULL)
+    {
       log_error("Could not open file.");
       exit(1);
     }
@@ -373,33 +409,41 @@ int main(int argc, char *argv[]) {
 
   int idHdrRead = shmget(IN_HDRKEY, sizeof(Header), SHM_RDONLY);
   int idBufRead = shmget(IN_BUFKEY, sizeof(Buffer), SHM_RDONLY);
-  if (idHdrRead < 0 || idBufRead < 0) {
+  if (idHdrRead < 0 || idBufRead < 0)
+  {
     log_error("Shared memory does not exist.");
     exit(1);
   }
 
   Header *HdrRead = (Header *)shmat(idHdrRead, 0, 0);
   Buffer *BufRead = (Buffer *)shmat(idBufRead, 0, 0);
-  if ((BufRead) == (Buffer *)-1) {
+  if ((BufRead) == (Buffer *)-1)
+  {
     log_error("Could not attach to shared memory.");
     exit(1);
-  } else {
+  }
+  else
+  {
     log_info("Attached to shared memory with id = %d.", idBufRead);
   }
 
   int idHdrWrite = shmget(OUT_HDRKEY, sizeof(Header), IPC_CREAT | 0666);
   int idBufWrite = shmget(OUT_BUFKEY, sizeof(Buffer), IPC_CREAT | 0666);
-  if (idHdrWrite < 0 || idBufWrite < 0) {
+  if (idHdrWrite < 0 || idBufWrite < 0)
+  {
     log_error("Could not create shared memory.");
     exit(1);
   }
 
   Header *HdrWrite = (Header *)shmat(idHdrWrite, 0, 0);
   Buffer *BufWrite = (Buffer *)shmat(idBufWrite, 0, 0);
-  if ((BufWrite) == (Buffer *)-1) {
+  if ((BufWrite) == (Buffer *)-1)
+  {
     log_error("Could not attach to shared memory.");
     exit(1);
-  } else {
+  }
+  else
+  {
     log_info("Created another shared memory with id = %d.", idBufWrite);
   }
 
@@ -412,16 +456,20 @@ int main(int argc, char *argv[]) {
   /*======================== MAIN EXECUTION LOOP =============================*/
   /*==========================================================================*/
 
-  while (keep) {
+  while (keep)
+  {
     int flag = 0;
-    while (currentReadBlock == BufRead->curr_blk) {
+    while (currentReadBlock == BufRead->curr_blk)
+    {
       usleep(2000);
-      if (flag == 0) {
+      if (flag == 0)
+      {
         log_debug("Waiting...");
         flag = 1;
       }
     }
-    if (flag == 1) log_debug("Ready!");
+    if (flag == 1)
+      log_debug("Ready!");
 
     int blknt = BLKSIZE / 4096;
     long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
@@ -429,7 +477,8 @@ int main(int argc, char *argv[]) {
     double blktime = blknt * cfg.dt * (double)currentReadBlock;
     log_debug("Reading block no. %d, t = %.2lf s.", currentReadBlock, blktime);
 
-    if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
+    if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1)
+    {
       log_debug("Realigning...");
       recNumRead = (BufRead->curr_rec - 1 + MAXBLKS) % MAXBLKS;
       currentReadBlock = BufRead->curr_blk - 1;
@@ -441,8 +490,10 @@ int main(int argc, char *argv[]) {
     /*======================== FRB INJECTION ===========================*/
     /*==================================================================*/
 
-    if (frbs->count > 0) {
-      for (int idx = 0; idx < frbs->count; ++idx) {
+    if (frbs->count > 0)
+    {
+      for (int idx = 0; idx < frbs->count; ++idx)
+      {
         /* Get the burst's data and metadata. */
         FILE *bf = fopen(frbs->filename[idx], "r");
 
@@ -457,7 +508,8 @@ int main(int argc, char *argv[]) {
         fread(&width, sizeof(double), 1, bf);
         fread(&tburst, sizeof(double), 1, bf);
 
-        if (nnz == 0) {
+        if (nnz == 0)
+        {
           log_warn("Cannot inject since no burst in the file.");
           continue;
         }
@@ -465,9 +517,12 @@ int main(int argc, char *argv[]) {
         int *rows = (int *)malloc(nnz * sizeof(int));
         int *cols = (int *)malloc(nnz * sizeof(int));
         float *fluxes = (float *)malloc(nnz * sizeof(float));
-        for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
-        for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
-        for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
+        for (int i = 0; i < nnz; ++i)
+          fread(&rows[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i)
+          fread(&cols[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i)
+          fread(&fluxes[i], sizeof(float), 1, bf);
 
         long seed = set_seed();                /* Set the seed for injection. */
         long offset = (long)(tburst / cfg.dt); /* Burst offset. */
@@ -476,7 +531,8 @@ int main(int argc, char *argv[]) {
             sqrt(2 * cfg.dt * (cfg.df * 1e6)); /* Ideal RMS calculation. */
 
         /* Begin injection. */
-        for (int i = 0; i < nnz; ++i) {
+        for (int i = 0; i < nnz; ++i)
+        {
           long I = (offset + (long)rows[i]) * (long)cfg.nf;
 
           /* Flip the band if it is Band 4 at the GMRT, otherwise do nothing. */
@@ -485,7 +541,8 @@ int main(int argc, char *argv[]) {
           else
             I += (long)cols[i];
 
-          if ((I <= blkbeg) || (I >= blkend)) break;
+          if ((I <= blkbeg) || (I >= blkend))
+            break;
           I = I % (long)BLKSIZE;
           int in = raw[I];
           int out;
@@ -495,18 +552,19 @@ int main(int argc, char *argv[]) {
           double signal = fluxes[i] / sigma;
           double pval = random_deviate(&seed);
 
-         /*======================== 8 bit FRB Injection ===========================*/
+          /*======================== 8 bit FRB Injection ===========================*/
           out = cal_bit_shift_prob(in, pval, lvl, signal);
           raw[I] = out;
         }
-          free(rows);
-          free(cols);
-          free(fluxes);
-          fclose(bf);
+        free(rows);
+        free(cols);
+        free(fluxes);
+        fclose(bf);
       }
     }
-    
-    if (dumpmode.u.b) fwrite(raw, 1, BLKSIZE, dump);
+
+    if (dumpmode.u.b)
+      fwrite(raw, 1, BLKSIZE, dump);
     memcpy(BufWrite->data + (long)BLKSIZE * (long)recNumWrite, raw, BLKSIZE);
 
     recNumRead = (recNumRead + 1) % MAXBLKS;
@@ -516,8 +574,9 @@ int main(int argc, char *argv[]) {
     BufWrite->curr_blk += 1;
     recNumWrite = (recNumWrite + 1) % MAXBLKS;
   }
-  free(raw);                      /* Free the memory allocated for data. */
-  if (dumpmode.u.b) fclose(dump); /* Close the file opened for debugging. */
+  free(raw); /* Free the memory allocated for data. */
+  if (dumpmode.u.b)
+    fclose(dump); /* Close the file opened for debugging. */
 
 /* Free up memory if and when the argument parsing exits. */
 exit:
