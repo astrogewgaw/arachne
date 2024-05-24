@@ -6,7 +6,7 @@ CC := gcc
 INC_DIR := extern
 INC_FLAGS := -I$(INC_DIR)
 DEPS := $(wildcard extern/*.c)
-CFLAGS := $(INC_FLAGS) -lm -DLOG_USE_COLOR
+CFLAGS := $(INC_FLAGS) -std=c99 -lm -DLOG_USE_COLOR
 
 build:
 	@echo "Building..."
