@@ -174,7 +174,6 @@ int cal_bit_shift_prob(int in, double lvl, double signal)
 {
   double plvl = 0, pval = 0;
   int out = in;
-
   for (int m = 0; m <= 255 - in; m++)
   {
     plvl = ((prob(min((in - 127) * lvl, (in + m - 127) * lvl - signal)) - prob(max((in - 128) * lvl, (in + m - 128) * lvl - signal))) /
@@ -185,7 +184,6 @@ int cal_bit_shift_prob(int in, double lvl, double signal)
       out = in + m;
     }
   }
-
   return out;
 }
 
@@ -514,20 +512,16 @@ int main(int argc, char *argv[])
           fread(&fluxes[i], sizeof(float), 1, bf);
 
         offset = (long)(tburst / cfg.dt); /* Burst offset. */
-
         if (!edge_case)
         {
           break_point_index = 0;
         }
-        fprintf(stderr, "break_point_index: %ld, dm: %lf\n", break_point_index, dm);
         /* Begin injection. */
-
         if (band.u.i == 4) // Flip the band if it is Band 4 at the GMRT, otherwise do nothing.
         {
           for (long i = break_point_index; i < nnz; ++i)
           {
             I = (offset + (long)time_bins[i]) * (long)cfg.nf + (cfg.nf - 1 - (long)channels[i]);
-
             if ((I <= blkbeg) || (I >= blkend))
             {
               edge_case = true;
@@ -538,12 +532,9 @@ int main(int argc, char *argv[])
             {
               edge_case = false;
             }
-
             I = I % (long)BLKSIZE;
             in = raw[I];
             signal = fluxes[i] / sigma;
-
-            /*======================== 8 bit FRB Injection ===========================*/
             out = cal_bit_shift_prob(in, lvl, signal);
             raw[I] = out;
           }
@@ -553,7 +544,6 @@ int main(int argc, char *argv[])
           for (long i = break_point_index; i < nnz; ++i)
           {
             I = (offset + (long)time_bins[i]) * (long)cfg.nf + (long)channels[i];
-
             if ((I <= blkbeg) || (I >= blkend))
             {
               edge_case = true;
@@ -567,13 +557,10 @@ int main(int argc, char *argv[])
             I = I % (long)BLKSIZE;
             in = raw[I];
             signal = fluxes[i] / sigma;
-
-            /*======================== 8 bit FRB Injection ===========================*/
             out = cal_bit_shift_prob(in, lvl, signal);
             raw[I] = out;
           }
         }
-        fprintf(stderr, "break_point_index: %ld, dm: %lf\n", break_point_index, dm);
         free(time_bins);
         free(channels);
         free(fluxes);
