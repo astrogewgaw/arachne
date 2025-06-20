@@ -20,7 +20,6 @@
 /* External libraries. */
 #include "extern/argtable3.h" // For argument parsing.
 #include "extern/log.h"       // For logging.
-#include "extern/mt19937.h"   // For random number generation.
 #include "extern/toml.h"      // For parsing TOML files.
 
 /* Arachne's version number. */
@@ -151,18 +150,61 @@ double clip(double x, double x1, double x2) {
 /* Find the probability of a Gaussian random variable. */
 double prob(double x) { return 0.5 + 0.5 * erf(x / sqrt(2)); }
 
-/* Set the seed for the RNG. */
-long set_seed() { return -time(NULL); }
+/* Calculate probability of shifting the bit: 8 bit injection */
+int cal_bit_shift_prob(int in, double lvl, double signal) {
+  double plvl = 0, pval = 0;
+  int out = in; // prob 255--> 255
+  if (in == 0) {
+    for (int m = 0; m <= 255 - in; m++) {
 
-/* Get a random number from the RNG b/w 0 and 1. */
-double random_deviate(long *seed) {
-  if (*seed < 0) {
-    init_genrand(-(*seed));
-    *seed = 1;
+      if (in + m == 0) {
+        plvl = prob(-127 * lvl - signal) / prob(-127 * lvl); // prob 0--> 0
+        if (pval < plvl) {
+          pval = plvl;
+          out = in + m;
+        }
+      } else if (in + m == 255) {
+        plvl = (prob(-127 * lvl) - prob(127 * lvl - signal)) /
+               prob(-127 * lvl); // prob o--> 255
+        if (pval < plvl) {
+          pval = plvl;
+          out = in + m;
+        }
+      } else {
+        plvl = (prob(min(-127 * lvl, (m - 127) * lvl - signal)) -
+                prob((m - 128) * lvl - signal)) /
+               prob((in - 127) * lvl); // prob 0--> m
+        if (pval < plvl) {
+          pval = plvl;
+          out = in + m;
+        }
+      }
+    }
+  } else {
+    for (int m = 0; m <= 255 - in; m++) {
+      if (in + m == 255) {
+        plvl = ((prob((in - 127) * lvl) -
+                 prob(max((in - 128) * lvl, 127 * lvl - signal))) /
+                (prob((in - 127) * lvl) -
+                 prob((in - 128) * lvl))); // prob n--> 255
+        if (pval < plvl) {
+          pval = plvl;
+          out = in + m;
+        }
+      } else {
+        plvl = ((prob(min((in - 127) * lvl, (in + m - 127) * lvl - signal)) -
+                 prob(max((in - 128) * lvl, (in + m - 128) * lvl - signal))) /
+                (prob((in - 127) * lvl) -
+                 prob((in - 128) * lvl))); // prob n--> n+m
+        if (pval < plvl) {
+          pval = plvl;
+          out = in + m;
+        }
+      }
+    }
   }
-  return genrand_real1();
+  return out;
 }
-
 /* Print Arachne's logo. */
 void print_logo() {
   char *logo = "\n"
@@ -394,8 +436,18 @@ int main(int argc, char *argv[]) {
   /*======================== MAIN EXECUTION LOOP =============================*/
   /*==========================================================================*/
 
+  int in, out, flag;
+  bool edge_case = false;
+  long M, N, nnz = 0, blkbeg, blkend, I, break_point_index = 0;
+  double dm, flux, width, tburst, offset, blktime, lvl = 0.030765, signal;
+  int blknt = BLKSIZE / 4096;
+  double sigma =
+      cfg.tsys /
+      (cfg.sysgain *
+       sqrt(2 * cfg.dt * (cfg.df * 1e6))); /* Ideal RMS calculation. */
+
   while (keep) {
-    int flag = 0;
+    flag = 0;
     while (currentReadBlock == BufRead->curr_blk) {
       usleep(2000);
       if (flag == 0) {
@@ -405,10 +457,9 @@ int main(int argc, char *argv[]) {
     }
     if (flag == 1) log_debug("Ready!");
 
-    int blknt = BLKSIZE / 4096;
-    long blkbeg = (long)currentReadBlock * (long)BLKSIZE;
-    long blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
-    double blktime = blknt * cfg.dt * (double)currentReadBlock;
+    blkbeg = (long)currentReadBlock * (long)BLKSIZE;
+    blkend = (long)(currentReadBlock + 1) * (long)BLKSIZE;
+    blktime = blknt * cfg.dt * (double)currentReadBlock;
     log_debug("Reading block no. %d, t = %.2lf s.", currentReadBlock, blktime);
 
     if (BufRead->curr_blk - currentReadBlock >= MAXBLKS - 1) {
@@ -420,22 +471,6 @@ int main(int argc, char *argv[]) {
     memcpy(raw, BufRead->data + (long)BLKSIZE * (long)recNumRead, BLKSIZE);
 
     /*==================================================================*/
-    /*======================== REQUANTIZATION ==========================*/
-    /*==================================================================*/
-
-    unsigned char temp = 0;
-    for (int i = 0; i < BLKSIZE; i = i + 4) {
-      temp = ((((raw[i + 0] << 2) & 0xc0) >> 6) & 0x03) |
-             ((((raw[i + 1] << 2) & 0xc0) >> 4) & 0x0c) |
-             ((((raw[i + 2] << 2) & 0xc0) >> 2) & 0x30) |
-             ((((raw[i + 3] << 2) & 0xc0)));
-      raw[i + 3] = (temp & 0x03);
-      raw[i + 2] = (temp & 0x0c) >> 2;
-      raw[i + 1] = (temp & 0x30) >> 4;
-      raw[i + 0] = (temp & 0xc0) >> 6;
-    }
-
-    /*==================================================================*/
     /*======================== FRB INJECTION ===========================*/
     /*==================================================================*/
 
@@ -443,9 +478,6 @@ int main(int argc, char *argv[]) {
       for (int idx = 0; idx < frbs->count; ++idx) {
         /* Get the burst's data and metadata. */
         FILE *bf = fopen(frbs->filename[idx], "r");
-
-        long M, N, nnz = 0;
-        double dm, flux, width, tburst;
 
         fread(&M, sizeof(long), 1, bf);
         fread(&N, sizeof(long), 1, bf);
@@ -460,79 +492,59 @@ int main(int argc, char *argv[]) {
           continue;
         }
 
-        int *rows = (int *)malloc(nnz * sizeof(int));
-        int *cols = (int *)malloc(nnz * sizeof(int));
+        int *time_bins = (int *)malloc(nnz * sizeof(int));
+        int *channels = (int *)malloc(nnz * sizeof(int));
         float *fluxes = (float *)malloc(nnz * sizeof(float));
-        for (int i = 0; i < nnz; ++i) fread(&rows[i], sizeof(int), 1, bf);
-        for (int i = 0; i < nnz; ++i) fread(&cols[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&time_bins[i], sizeof(int), 1, bf);
+        for (int i = 0; i < nnz; ++i) fread(&channels[i], sizeof(int), 1, bf);
         for (int i = 0; i < nnz; ++i) fread(&fluxes[i], sizeof(float), 1, bf);
 
-        long seed = set_seed();                /* Set the seed for injection. */
-        long offset = (long)(tburst / cfg.dt); /* Burst offset. */
-        double sigma =
-            cfg.tsys / cfg.sysgain /
-            sqrt(2 * cfg.dt * (cfg.df * 1e6)); /* Ideal RMS calculation. */
-
-        /* Begin injection. */
-        for (int i = 0; i < nnz; ++i) {
-          long I = (offset + (long)rows[i]) * (long)cfg.nf;
-
-          /* Flip the band if it is Band 4 at the GMRT, otherwise do nothing. */
-          if (band.u.i == 4)
-            I += (cfg.nf - 1 - (long)cols[i]);
-          else
-            I += (long)cols[i];
-
-          if ((I <= blkbeg) || (I >= blkend)) break;
-          I = I % (long)BLKSIZE;
-          int in = raw[I];
-          int out;
-
-          double lvl = 1;
-          double plvl1, plvl2, plvl3;
-          double signal = fluxes[i] / sigma;
-          double pval = random_deviate(&seed);
-
-          if (in == 3)
-            out = 3;
-          else if (in == 2) {
-            plvl1 = (prob(max(0, lvl - signal)) - 0.5) / (prob(lvl) - 0.5);
-            if (pval < plvl1)
-              out = 2;
-            else
-              out = 3;
-          } else if (in == 1) {
-            plvl1 =
-                (0.5 - prob(clip(-lvl, 0, lvl - signal))) / (0.5 - prob(-lvl));
-            plvl2 = plvl1 + (prob(clip(-lvl, 0, lvl - signal)) -
-                             prob(max(-signal, -lvl))) /
-                                (0.5 - prob(-lvl));
-            if (pval < plvl1)
-              out = 3;
-            else if (pval < plvl2)
-              out = 2;
-            else
-              out = 1;
-          } else if (in == 0) {
-            plvl1 = (prob(-lvl) - prob(min(-signal + lvl, -lvl))) / prob(-lvl);
-            plvl2 = plvl1 + (prob(min(-signal + lvl, -lvl)) -
-                             prob(min(-signal, -lvl))) /
-                                prob(-lvl);
-            plvl3 = plvl2 + (prob(min(-signal, -lvl)) - prob(-lvl - signal)) /
-                                prob(-lvl);
-            if (pval < plvl1)
-              out = 3;
-            else if (pval < plvl2)
-              out = 2;
-            else if (pval < plvl3)
-              out = 1;
-            else
-              out = 0;
-          }
-          raw[I] = out;
+        offset = (long)(tburst / cfg.dt); /* Burst offset. */
+        if (!edge_case) {
+          break_point_index = 0;
         }
-        free(rows);
-        free(cols);
+        /* Begin injection. */
+        if (band.u.i == 4) // Flip the band if it is Band 4 at the GMRT,
+                           // otherwise do nothing.
+        {
+          for (long i = break_point_index; i < nnz; ++i) {
+            I = (offset + (long)time_bins[i]) * (long)cfg.nf +
+                (cfg.nf - 1 - (long)channels[i]);
+            if ((I <= blkbeg) || (I >= blkend)) {
+              edge_case = true;
+              break_point_index = i;
+              break;
+            } else {
+              edge_case = false;
+            }
+            I = I % (long)BLKSIZE;
+            in = raw[I];
+            signal = fluxes[i] / (sigma);
+            out = cal_bit_shift_prob(in, lvl, signal);
+            raw[I] = out;
+          }
+        } else // Copied the code for optimization - avoiding nnz number of
+               // if-else statements every file and every block!
+        {
+          for (long i = break_point_index; i < nnz; ++i) {
+            I = (offset + (long)time_bins[i]) * (long)cfg.nf +
+                (long)channels[i];
+            if ((I <= blkbeg) || (I >= blkend)) {
+              edge_case = true;
+              break_point_index = i;
+              break;
+            } else {
+              edge_case = false;
+            }
+            I = I % (long)BLKSIZE;
+            in = raw[I];
+            signal = fluxes[i] / (sigma);
+            out = cal_bit_shift_prob(in, lvl, signal);
+            raw[I] = out;
+          }
+        }
+        free(time_bins);
+        free(channels);
         free(fluxes);
         fclose(bf);
       }
